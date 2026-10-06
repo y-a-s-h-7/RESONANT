@@ -1,0 +1,47 @@
+# Instance / runtime artifacts
+.vt.lock
+.vt.pid
+_vt.*
+*.log
+resonant.log
+settings.json*
+
+# Python virtual environments
+.venv/
+venv/
+env/
+.env/
+
+# Python cache & build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Testing & Linting caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.freebuff/
+
+# Audio, temporary records, benchmarks (privacy-first: never commit audio)
+*.wav
+*.mp3
+*.ogg
+*.flac
+bench_results/
+
+# Editor & OS artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
+ehthumbs.db
+desktop.ini
+.DS_Store

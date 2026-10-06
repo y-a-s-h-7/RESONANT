@@ -1,0 +1,10 @@
+# Resonant runtime dependencies (install into the environment that runs the app).
+# The dev/test environment (requirements-dev.txt) intentionally does NOT need these.
+numpy>=1.26
+sounddevice>=0.4.6
+requests>=2.31
+pystray>=0.19.5
+pillow>=10.0
+# NOTE: pyautogui and pyperclip are gone. Typing and clipboard work now go
+# through injector.py / platform_win.py using Win32 SendInput and the clipboard
+# API directly (unicode-safe, no FailSafeException, no 0.1 s per-key delay).

@@ -1,0 +1,10 @@
+# Resonant dev/test dependencies. Installs fast; never heavy ML models (brief §1 rule 5).
+pytest>=8.0
+pytest-mock>=3.12
+ruff>=0.5
+# Light runtime imports exercised by tests and --smoke (no heavy deps):
+requests>=2.31
+numpy>=1.26
+sounddevice>=0.4.6
+pystray>=0.19.5
+pillow>=10.0

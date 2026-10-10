@@ -179,6 +179,8 @@ class ResonantEngine:
             "last_final": self.last_final,
             "last_status": self.last_status,
             "hotkey_backend": self.hotkey_backend,
+            # Smart-mode skip vs LLM-decision counters (text-free telemetry).
+            "smart_decisions": editor_mod.decision_counts(),
         }
         if overrides:
             s.update(overrides)
@@ -241,6 +243,8 @@ class ResonantEngine:
             on_press=self._on_press,
             on_release=self._on_release,
             on_emergency=self._emergency_quit,
+            undo_chord=self.settings.get("undo_chord", "off"),
+            on_undo=self._on_undo,
             platform=platform,
         )
         self.hotkey_backend = self._hotkey.start()
@@ -272,6 +276,39 @@ class ResonantEngine:
     def restart_hotkey(self):
         self._start_hotkey()
 
+    # --------------------------------------------------------------- undo (Phase 8)
+    def undo_last_dictation(self):
+        """Public entry point: tray item, chord, or any other caller.
+
+        Routes through the Injector so the same hwnd/age/modifier guards apply.
+        A successful undo clears the record so a second tap can never delete
+        text the user typed themselves; a refusal keeps the record for retry.
+        """
+        platform = self._platform_obj()
+        ok, code = self._injector.undo_last(platform)
+        if ok:
+            self._notice("Last dictation undone.")
+        elif code == "nothing":
+            self._notice("Nothing to undo.")
+        elif code == "window":
+            self._notice("Undo skipped — the window changed since you dictated.\n"
+                         "Alt-Tab back and try again (within 30 s).")
+        elif code == "stale":
+            self._notice("Undo skipped — more than 30 s have passed.")
+        elif code == "held":
+            self._notice("Undo skipped — a modifier key is still held "
+                         "(Backspace would delete whole words).")
+        elif code == "send":
+            self._notice("Undo skipped — SendInput refused.")
+        else:
+            self._notice("Undo skipped.")
+        return ok
+
+    def _on_undo(self):
+        """Hotkey chord fired. Only while the app is alive."""
+        if self._started:
+            self.undo_last_dictation()
+
     # --------------------------------------------------------------- models
     def load_models(self, target=None, persist=True):
         """Load an STT model. Commits the setting only on success (W4.5)."""
@@ -281,11 +318,18 @@ class ResonantEngine:
             generation = self._load_gen
         self.loading_model = target
         self.set_stage(f"Loading {target}…")
-        self._emit_state()
-        try:
-            log(f"Loading STT '{target}'…")
-            import stt
-            model = stt.load_model(target)
+        self._emit_state()        try:
+            log(f"Loading STT '{target}' (backend { backend})…")
+            if backend == "faster":
+                # Faster-whisper (CTranslate2) backend — lazy import so the dev
+                # venv that stays on the default whisper backend never touches it.
+                # `target` is forwarded to faster_whisper.load_model (same model
+                # identifiers the user already knows: base.en, small.en, …).
+                import faster_stt
+                model = faster_stt.load_model(target)
+            else:
+                import whisper
+                model = whisper.load_model(target)
         except Exception as e:
             if generation == self._load_gen:
                 self.loading_model = None
@@ -293,11 +337,11 @@ class ResonantEngine:
                 self.set_stage("")
                 # The setting was never committed, so the previous model stays
                 # active and the next launch still uses it (W4.5).
-                self._notice(f"Could not load '{target}' ({e}) — "
+                self._notice(f"Could not load '{ target}' ({e}) — "
                              + ("keeping the current model." if self.stt_model
                                 else "dictation is unavailable."))
                 self._emit_state()
-            log(f"MODEL LOAD FAILED ({target}): {e}")
+            log(f"MODEL LOAD FAILED ({ target}): {e}")
             return False
         if generation != self._load_gen:
             log(f"Discarding superseded model '{target}'.")
@@ -378,7 +422,10 @@ class ResonantEngine:
                            device=self.settings.get("input_device"),
                            max_seconds=self.settings.get("max_record_seconds"),
                            release_tail_ms=self.settings.get("release_tail_ms", 250),
-                           on_max=self._on_max_duration)
+                           on_max=self._on_max_duration,
+                           silence_autostop_ms=self._silence_autostop_ms(),
+                           min_peak=self.settings.get("min_peak", 0.01),
+                           on_silence=self._on_silence_stop)
         except Exception as e:
             self.is_recording = False
             self._notice(f"Microphone unavailable ({e}).")
@@ -436,6 +483,32 @@ class ResonantEngine:
     def _on_max_duration(self):
         self._notice("Maximum recording length reached — processing now.")
         self.play_blip(repeats=2, volume=0.05)
+
+    def _silence_autostop_ms(self):
+        """Effective silence auto-stop window for the NEXT recording.
+
+        `0` (the default) is off. The feature applies in toggle mode — a long
+        dictation should end by itself once you stop talking — and in hold mode
+        only when the user has explicitly enabled it, i.e. only when this same
+        setting is non-zero: hold-to-talk is the classic behaviour and must
+        never start auto-stopping on its own.
+        """
+        try:
+            value = int(self.settings.get("silence_autostop_ms", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+        return value if value > 0 else 0
+
+    def _on_silence_stop(self):
+        """Recorder hit the silence window: finish the dictation by itself.
+
+        Finish FIRST so the state is (not recording, not processing) when the
+        notice lands — that is the only window in which the pill shows it.
+        """
+        if not self.is_recording:
+            return
+        self._finish_recording()
+        self._notice("Stopped (silence)")
 
     # ------------------------------------------------------------ job queue
     def _busy(self):
@@ -562,10 +635,21 @@ class ResonantEngine:
         vocab = self.settings.get("custom_vocabulary") or []
         if vocab:
             initial_prompt = ", ".join(vocab)[:1000]
+        backend = self.settings.get("asr_backend", "default")
+        fp16 = self.settings.get("stt_fp16", "auto")
+        if backend == "faster" and fp16 == "auto":
+            fp16 = True                          # CTranslate2 handles fp16 on CPU too
+        extra = {}
+        if backend == "faster":
+            extra["vad_filter"] = None           # forwarded through to faster-whisper
         with self._model_lock:
-            return transcriber_mod.transcribe(self.stt_model, audio,
-                                              language=LANGUAGE,
-                                              initial_prompt=initial_prompt)
+            return transcriber_mod.transcribe(
+                self.stt_model, audio,
+                language=LANGUAGE,
+                initial_prompt=initial_prompt,
+                fp16=self.settings.get("stt_fp16", "auto"),
+                **extra,
+            )
 
     def _clean(self, raw_text):
         mode = self.settings.get("ai_cleanup_mode", "smart")

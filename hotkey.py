@@ -14,6 +14,10 @@ Callbacks (all optional, invoked on the dispatcher thread):
     on_press()        configured key went down (fresh press, no auto-repeat)
     on_release()      key came back up
     on_emergency()    Ctrl+Shift+Scroll Lock chord detected
+    on_undo()         the configured undo chord (Ctrl+Alt+Scroll Lock /
+                      Ctrl+Alt+Pause, off by default) — polled like the
+                      emergency chord, since it must work even when the
+                      dictation hotkey itself is idle
 
 Known limitation (documented in README): while an ELEVATED window has focus the
 hook neither sees nor swallows keys, because a low-integrity process cannot
@@ -27,6 +31,8 @@ from platform_win import (
     HC_ACTION,
     LLKHF_INJECTED,
     VK_CONTROL,
+    VK_MENU,
+    VK_PAUSE,
     VK_SCROLL,
     VK_SHIFT,
     WM_KEYDOWN,
@@ -38,6 +44,15 @@ VK_MAP = {f"f{i}": 0x70 + i - 1 for i in range(1, 25)}   # f1..f24
 VK_MAP.update({"pause": 0x13, "capslock": 0x14})
 
 ALLOWED_KEYS = sorted(VK_MAP)
+
+# Undo chord (Phase 8, off by default). Poll-based like the emergency chord.
+# Ctrl+Shift+Z is redo in most apps, so it is NOT offered; these combos are
+# rarely bound by applications. Each entry is the full key set that must be
+# down: (ctrl, alt, trigger).
+UNDO_CHORDS = {
+    "ctrl+alt+scroll_lock": (VK_CONTROL, VK_MENU, VK_SCROLL),
+    "ctrl+alt+pause": (VK_CONTROL, VK_MENU, VK_PAUSE),
+}
 
 HOOK_READY_TIMEOUT_S = 1.0
 DISPATCH_POLL_S = 0.01
@@ -58,13 +73,15 @@ class Hotkey:
 
     def __init__(self, key="f9", swallow_active=lambda: False,
                  on_press=None, on_release=None, on_emergency=None,
-                 platform=None):
+                 undo_chord="off", on_undo=None, platform=None):
         self.key = (key or "f9").lower()
         self.vk = VK_MAP.get(self.key)
         self.swallow_active = swallow_active
         self.on_press = on_press
         self.on_release = on_release
         self.on_emergency = on_emergency
+        self.on_undo = on_undo
+        self._undo_vks = UNDO_CHORDS.get((undo_chord or "off").lower())
         self.platform = platform
         self.backend = None                 # "hook" | "polling" | "invalid-key"
         self._queue = []
@@ -226,20 +243,36 @@ class Hotkey:
 
     # ------------------------------------------------------------ emergency
     def _emergency_loop(self):
-        """Ctrl+Shift+Scroll Lock (W2.3). Scroll Lock ALONE must do nothing."""
+        """Ctrl+Shift+Scroll Lock (W2.3) + the optional undo chord (Phase 8).
+
+        Scroll Lock ALONE must do nothing. The two chords are kept mutually
+        exclusive: emergency additionally requires Alt NOT held, undo requires
+        Shift NOT held — so Ctrl+Alt+Shift+Scroll Lock can never quit the app
+        while the user means to undo. Each fires once per press.
+        """
         user32 = self.platform.user32 if self.platform else None
         if user32 is None:
             return
         prev = False
+        prev_undo = False
         while not self._stop.is_set():
             try:
-                scroll = bool(user32.GetAsyncKeyState(VK_SCROLL) & 0x8000)
-                ctrl = bool(user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
-                shift = bool(user32.GetAsyncKeyState(VK_SHIFT) & 0x8000)
-                chord = scroll and ctrl and shift
+                def down(vk):
+                    return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+                scroll = down(VK_SCROLL)
+                ctrl = down(VK_CONTROL)
+                shift = down(VK_SHIFT)
+                alt = down(VK_MENU)
+                chord = scroll and ctrl and shift and not alt
                 if chord and not prev and self.on_emergency:
                     self.on_emergency()
                 prev = chord
+                if self._undo_vks and self.on_undo:
+                    undo_down = (not shift
+                                 and all(down(vk) for vk in self._undo_vks))
+                    if undo_down and not prev_undo:
+                        self.on_undo()
+                    prev_undo = undo_down
             except Exception:
                 pass
             time.sleep(0.05)

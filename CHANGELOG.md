@@ -45,7 +45,7 @@
 
 ## [1.2.0] — hardening & reliability pass
 
-Executed from `RESONANT_TASK_BRIEF.md` (Phases 0–7). See `docs/WALKTHROUGH.md`
+Executed from `docs/archive/RESONANT_TASK_BRIEF.md` (Phases 0–7). See `docs/archive/WALKTHROUGH.md`
 for the per-phase detail and `docs/MANUAL_VERIFICATION.md` for the checklist.
 
 ### Fixed — data loss and wrong output
@@ -105,7 +105,7 @@ for the per-phase detail and `docs/MANUAL_VERIFICATION.md` for the checklist.
 * `resonant_cli.py clean / transcribe / doctor`.
 * `bench_cases.json` + a rewritten `bench_editor.py` that benchmarks the shipped
   prompt and guards.
-* `docs/IMPLEMENTATION_PLAN.md`, `docs/WALKTHROUGH.md`,
+* `docs/archive/IMPLEMENTATION_PLAN.md`, `docs/archive/WALKTHROUGH.md`,
   `docs/MANUAL_VERIFICATION.md`, `docs/ROADMAP.md`, `CHANGELOG.md`.
 * 139 unit tests, all runnable without a microphone, torch, STT, Ollama or
   Windows.

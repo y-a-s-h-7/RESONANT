@@ -11,28 +11,31 @@
   **microphone picker with default-device fallback** — hold-to-talk excludes
   people with RSI or motor impairments, so toggle mode is a real accessibility
   win (W5.8).
+* **Silence auto-stop** (`silence_autostop_ms`, energy-based end of speech):
+  the recorder watches a short-window RMS against an adaptive noise floor and
+  ends a dictation by itself after the chosen window of trailing silence — the
+  last piece of old item 1. Off by default (`0`); pairs with toggle mode.
+* **Undo last dictation** (`undo_chord`, tray item + optional chord):
+  the Injector records `{method, length, text, ts, hwnd}` for the last injection
+  in memory only and removes it on request — Ctrl+Z for a paste, Backspace ×
+  length (counting UTF-16 code units, so surrogate pairs are handled correctly)
+  for typed text — but only while the foreground window is unchanged and within
+  30 s; otherwise the tray item explains why not.
 
 ## Optional features (Phase 8) — remaining, smallest effort first
 
-1. **Silence auto-stop.** `silence_autostop_ms` (energy-based end of speech) —
-   the only part of the old item 1 still missing; it pairs naturally with
-   toggle mode so a long dictation ends by itself when you stop talking.
-2. **Undo last dictation.** Track `{method, length, text, ts, hwnd}` for the
-   last injection; tray item (and optionally a chord): Ctrl+Z for paste,
-   Backspace × length for typed text, only if the foreground window is
-   unchanged and within ~30 s — otherwise explain why not (_verify_ per app).
-3. **Spoken punctuation & formatting.** Deterministic pre-pass before the LLM,
+1. **Spoken punctuation & formatting.** Deterministic pre-pass before the LLM,
    off by default: "new line", "new paragraph", "comma", "period", "question
    mark", "open/close quote". Ambiguous words like "period" are why it is opt-in.
-4. **Level test** in the dashboard (live meter + "say something" before
+3. **Level test** in the dashboard (live meter + "say something" before
    recording for real) and a device-list refresh when hardware is plugged in;
    the selector and default-device fallback now exist.
-5. **History export** (opt-in, warns that it writes plaintext) and per-row
+4. **History export** (opt-in, warns that it writes plaintext) and per-row
    delete.
-6. **Faster ASR backend** behind the `Transcriber` interface, selectable
+5. **Faster ASR backend** behind the `Transcriber` interface, selectable
    via `asr_backend`, plus `bench_asr.py` for user-supplied WAV files. Do not
    change the default without measurements.
-7. **Ollama structured output** (`format` JSON schema) to remove the
+6. **Ollama structured output** (`format` JSON schema) to remove the
    quote-stripping hack. Keep plain output unless the bench shows a clear win.
 
 ## Backlog — not planned, deliberately not implemented

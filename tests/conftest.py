@@ -25,7 +25,41 @@ def _ensure_module(name, **attrs):
 
 
 _ensure_module("sounddevice", play=lambda *a, **k: None, InputStream=object)
-_ensure_module("stt", load_model=lambda name: None)
+# The ASR backend is OpenAI Whisper: PyPI distribution `openai-whisper`, which
+# imports as `whisper` and pulls in torch. Stub it under its real import name so
+# tests run without the multi-GB dependency.
+_ensure_module("whisper", load_model=lambda name: None)
+
+# Faster-whisper backend (Phase 8): stubbed so tests that touch the faster
+# path never import the real CTranslate2 package in the light dev venv. The fake
+# model's .transcribe() returns a (segments, info) tuple whose segments are
+# objects with the attributes faster_whisper.Segment exposes — that is exactly
+# what faster_stt.FasterModel transcribe() converts into the dict shape.
+class _FakeSegment:
+    def __init__(self, text="", start=0.0, end=0.0, no_speech_prob=0.0,
+                 avg_logprob=0.0, compression_ratio=1.0):
+        self.text = text
+        self.start = start
+        self.end = end
+        self.no_speech_prob = no_speech_prob
+        self.avg_logprob = avg_logprob
+        self.compression_ratio = compression_ratio
+
+
+class _FakeFasterModel:
+    def __init__(self, target="base.en"):
+        self.target = target
+
+    def transcribe(self, audio, **kwargs):
+        vad = kwargs.get("vad_filter")
+        initial_prompt = kwargs.get("initial_prompt")
+        return [_FakeSegment(text="hello world")], {
+            "language": kwargs.get("language", "en"),
+            "vad_filter": vad,
+            "initial_prompt": initial_prompt,
+        }
+
+
 
 
 @pytest.fixture(autouse=True)

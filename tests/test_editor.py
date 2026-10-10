@@ -25,6 +25,39 @@ class TestShouldUseLLM:
         assert editor.should_use_llm("anything", "off") is False
         assert editor.should_use_llm("anything", "always") is True
 
+    @pytest.mark.parametrize("text,expected", [
+        # "like" as a real verb or comparison: not a cue, never rewrite for it
+        ("I like pizza", False),
+        ("I like pizza and I like pasta", False),
+        ("I'd like to book a room for Tuesday", False),
+        ("she runs like the wind", False),
+        ("the new build runs like the wind compared to the old one", False),
+        # "like" in filler-shaped contexts: a cue
+        ("so I was like thinking we should ship on Friday", True),
+        ("it was, like, the best demo we have given", True),
+        ("um like I said the budget is approved", True),
+        # ordinals/second/next that are NOT enumeration
+        ("wait a second, the deploy is still running", False),
+        ("the second option looks cheaper but slower", False),
+        ("this is the first time we have seen this error", False),
+        ("let's review it next week after the release", False),
+        ("I'll take the next one", False),
+        ("give me one second to finish this", False),
+        ("I like to list the files every morning", False),
+        # real enumeration
+        ("first review the pull request second update the docs", True),
+        ("the first item is apples, the second item is pears", True),
+        ("item one fix the login bug, item two add tests", True),
+        ("please add a bullet for the billing issue", True),
+        ("shopping list: milk, eggs, bread", True),
+        ("I want a list. First apples. Second pears.", True),
+        # corrections and stutters keep working
+        ("the meeting is Monday scratch that Tuesday", True),
+        ("we need to to fix the login bug", True),
+    ])
+    def test_like_and_list_precision(self, text, expected):
+        assert editor.should_use_llm(text, "smart", 40) is expected
+
 
 # ------------------------------------------------------------ validate_rewrite
 class TestValidateRewrite:
@@ -107,6 +140,50 @@ class TestChunkTranscript:
 
 
 # -------------------------------------------------------------------- clean
+class TestDecisionCounts:
+    """Smart-mode skip vs LLM decisions — counters, no transcript text."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_counters(self):
+        editor.DECISION_COUNTS.reset()
+        yield
+        editor.DECISION_COUNTS.reset()
+
+    def _llm(self, reply):
+        def fn(model, raw, timeout_s, keep_alive, url):
+            return reply, "stop"
+        return fn
+
+    def test_smart_skip_counted_without_touching_the_llm(self):
+        text, status = editor.clean("hello my name is Akshay", mode="smart",
+                                    llm_fn=self._llm("SHOULD NOT BE CALLED"))
+        assert status == "raw:skipped-llm"
+        assert editor.decision_counts() == {"smart_skips": 1,
+                                            "smart_llm_calls": 0}
+
+    def test_smart_llm_decision_counted(self):
+        text, status = editor.clean("um hello there", mode="smart",
+                                    llm_fn=self._llm("Hello there."))
+        assert status == "cleaned"
+        assert editor.decision_counts() == {"smart_skips": 0,
+                                            "smart_llm_calls": 1}
+
+    def test_other_modes_do_not_touch_smart_counters(self):
+        editor.clean("hello my name is Akshay", mode="off",
+                     llm_fn=self._llm("nope"))
+        editor.clean("hello my name is Akshay", mode="always",
+                     llm_fn=self._llm("Hello my name is Akshay."))
+        assert editor.decision_counts() == {"smart_skips": 0,
+                                            "smart_llm_calls": 0}
+
+    def test_snapshot_never_contains_transcript_text(self):
+        editor.clean("um please email the secret launch date", mode="smart",
+                     llm_fn=self._llm("Please email the secret launch date."))
+        snapshot = editor.decision_counts()
+        assert all(isinstance(v, int) for v in snapshot.values())
+        assert "secret" not in str(snapshot)
+
+
 class TestCleanPipeline:
     def _llm(self, reply, done_reason="stop", calls=None):
         def fn(model, raw, timeout_s, keep_alive, url):

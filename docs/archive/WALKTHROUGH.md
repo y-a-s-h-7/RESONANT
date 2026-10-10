@@ -31,7 +31,7 @@ Gate status at the end of this pass:
 * Dead code removed (`threading`/`sys`/`time` imports, `_dpi`, unused startup
   constants, old bench prompt copy).
 
-Tests added: `tests/conftest.py` (stubs `sounddevice`/`stt` so tests run
+Tests added: `tests/conftest.py` (stubs `sounddevice`/`whisper` so tests run
 without heavy ML or audio hardware).
 
 ## Phase 1 — Silent data loss & wrong output (W1.1–W1.6)

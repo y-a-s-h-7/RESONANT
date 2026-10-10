@@ -121,15 +121,48 @@ def gate(raw_text, stats, segments, min_peak=MIN_PEAK_DEFAULT,
     return text, None
 
 
+# ------------------------------------------------------------ precision mode
+def _use_fp16(mode="auto"):
+    """Resolve the `stt_fp16` setting to a concrete half-precision flag.
+
+    Half-precision only helps on a CUDA GPU — there it roughly halves
+    transcription time, while on CPU torch refuses fp16 outright. `mode` is the
+    setting: "auto" and True enable fp16 only when torch reports an available
+    CUDA device; False pins the fp32 CPU path even on a flaky GPU where
+    auto-detection would enable fp16. `torch` is imported lazily: importing
+    transcriber — and therefore the engine/CLI — must never pull in the
+    multi-GB stack, which the light dev venv does not install. Any failure
+    (torch absent, broken CUDA, no device) means "no fp16".
+    """
+    if mode is False:
+        return False
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 # ------------------------------------------------------------ STT transcription call
-def transcribe(model, audio, language="en", initial_prompt=None):
+def transcribe(model, audio, language="en", initial_prompt=None, fp16="auto",
+                  **kwargs):
     """Greedy decode: OMITTING beam_size/best_of gives GreedyDecoder with
-    temperature=0 (beam_size=1 would select BeamSearchDecoder instead)."""
-    kwargs = {"fp16": False, "temperature": 0,
-              "condition_on_previous_text": False}
+    temperature=0 (beam_size=1 would select BeamSearchDecoder instead).
+
+    `fp16` is the `stt_fp16` setting ("auto" | True | False); `_use_fp16`
+    resolves it, so GPU users get half-precision while CPU users stay on fp32.
+
+    Extra kwargs (e.g. `vad_filter` for the faster-whisper backend) are
+    forwarded to the model unchanged — the caller is responsible for passing
+    only kwargs the model accepts (brief Phase 8: pass vad_filter and
+    initial_prompt through to the faster-whisper model)."""
+    resolved = {"fp16": _use_fp16(fp16), "temperature": 0,
+                "condition_on_previous_text": False}
     if language:
-        kwargs["language"] = language
+        resolved["language"] = language
     if initial_prompt:
-        kwargs["initial_prompt"] = initial_prompt
-    with_model = model
-    return with_model.transcribe(audio, **kwargs)
+        resolved["initial_prompt"] = initial_prompt
+    for k, v in kwargs.items():
+        if k not in resolved:
+            resolved[k] = v
+    return model.transcribe(audio, **resolved)

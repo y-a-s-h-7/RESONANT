@@ -1,4 +1,4 @@
-# Resonant — Implementation Plan (from RESONANT_TASK_BRIEF.md)
+# Resonant — Implementation Plan (from `docs/archive/RESONANT_TASK_BRIEF.md`)
 
 Planning-mode artifact. Work items keep their brief IDs (W0.1 … W7.2).
 Ground rules, invariants and STOP-AND-ASK triggers are taken verbatim from the brief.
@@ -56,7 +56,7 @@ P0 (venv, tests scaffold, platform_win, cli, lint cleanup)
   → Phase 8 optional features (smallest first) — only if P0–P7 green
 ```
 Each phase: ruff + pytest + `--smoke`, then a Walkthrough artifact appended to
-`docs/WALKTHROUGH.md` (one section per phase). Items I cannot verify without the
+`docs/archive/WALKTHROUGH.md` (one section per phase). Items I cannot verify without the
 owner go to `docs/MANUAL_VERIFICATION.md` tagged with W-IDs (brief §6 list).
 
 ## 4. Task List (tagged; every brief item covered)

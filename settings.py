@@ -19,7 +19,13 @@ to default with a notice").
 import json
 import os
 
-from config import DEFAULT_SETTINGS, SETTINGS_PATH
+from config import (
+    DEFAULT_SETTINGS,
+    SETTINGS_PATH,
+    SILENCE_AUTOSTOP_MAX_MS,
+    SILENCE_AUTOSTOP_MIN_MS,
+    SILENCE_OFF,
+)
 
 LAST_NOTICES = []
 
@@ -47,8 +53,15 @@ ENUMS = {
     "inject_mode": ("auto", "type", "paste"),
     "hotkey_mode": ("hold", "toggle"),
     "asr_backend": ("default", "faster"),
+    # Ctrl+Shift+Z is redo almost everywhere; the offered chords are the
+    # Scroll Lock/Pause combos that apps rarely bind, and "off" is default.
+    "undo_chord": ("off", "ctrl+alt+scroll_lock", "ctrl+alt+pause"),
 }
 
+
+# ____________________________________________________________ ENUM branch guards
+
+ENUM_KEYS = frozenset(ENUMS)
 
 def default_for(key):
     return DEFAULT_SETTINGS.get(key)
@@ -77,6 +90,23 @@ def validate(key, value):
             return True, value.strip(), None
         return False, default, "stt_model must be a non-empty string"
 
+    if key == "stt_fp16":
+        # "auto" = fp16 only on a CUDA GPU; True/False force the choice.
+        if value is True or value is False or value == "auto":
+            return True, value, None
+        return False, default, "stt_fp16 must be 'auto', true or false"
+
+    if key == "silence_autostop_ms":
+        # 0 (off) or a window long enough to be deliberate: a value below
+        # 500 ms would end a dictation during an ordinary breath.
+        reason = "silence_autostop_ms must be 0 or 500-5000 ms"
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False, default, reason
+        ms = int(value)
+        if ms == SILENCE_OFF or SILENCE_AUTOSTOP_MIN_MS <= ms <= SILENCE_AUTOSTOP_MAX_MS:
+            return True, ms, None
+        return False, default, reason
+
     if key == "ollama_model":
         if isinstance(value, str) and value.strip():
             return True, value.strip(), None
@@ -101,6 +131,13 @@ def validate(key, value):
         if isinstance(value, bool):
             return True, value, None
         return False, default, f"'{key}' must be true or false"
+
+    if key == "faster_vad":
+        # merged from ENUMS above when it was a plain tuple; kept explicit for
+        # clarity since it is a new setting.
+        if isinstance(value, bool):
+            return True, value, None
+        return False, DEFAULT_SETTINGS[key], "'faster_vad' must be true or false"
 
     if isinstance(default, int) and not isinstance(default, bool):
         if isinstance(value, bool) or not isinstance(value, (int, float)):

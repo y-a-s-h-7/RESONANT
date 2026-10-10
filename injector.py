@@ -9,6 +9,10 @@ corner, and slept 0.1 s per character.
            only if the clipboard is still ours, and mark the content as
            "do not sync/history" so dictations stay out of Win+V
     auto   type for short single-line text, paste for multiline/long text
+    undo   remembers the LAST injection (method/length/text/ts/hwnd, memory
+           only — never on disk) and removes it again on request: backspaces
+           for typed text (one per UTF-16 unit), Ctrl+Z for a paste — but
+           only while the foreground window is unchanged and under 30 s old
 
 All Win32 access goes through an injected platform object, so tests never touch
 the real clipboard or keyboard.
@@ -30,8 +34,28 @@ class KEYBDINPUT(ctypes.Structure):
                 ("dwExtraInfo", ULONG_PTR)]
 
 
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", ctypes.c_long),
+                ("dy", ctypes.c_long),
+                ("mouseData", ctypes.c_ulong),
+                ("dwFlags", ctypes.c_ulong),
+                ("time", ctypes.c_ulong),
+                ("dwExtraInfo", ULONG_PTR)]
+
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [("uMsg", ctypes.c_ulong),
+                ("wParamL", ctypes.c_short),
+                ("wParamH", ctypes.c_ushort)]
+
+
 class _INPUTunion(ctypes.Union):
-    _fields_ = [("ki", KEYBDINPUT), ("padding", ctypes.c_byte * 24)]
+    # MOUSEINPUT is the largest member, so the union (and therefore INPUT) is
+    # 40 bytes on x64 / 28 on x86 — the size SendInput validates. A hand-rolled
+    # `c_byte * 24` padding made INPUT 32 on x64 (invalid: SendInput returned 0),
+    # so Unicode typing silently failed and every dictation fell back to the
+    # clipboard. MOUSEINPUT must be present for the union to be right.
+    _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("hi", HARDWAREINPUT)]
 
 
 class INPUT(ctypes.Structure):
@@ -39,6 +63,9 @@ class INPUT(ctypes.Structure):
 
 
 VK_V = 0x56
+VK_Z = 0x5A
+VK_BACK = 0x08
+UNDO_MAX_AGE_S = 30.0
 MODIFIERS = (pw.VK_SHIFT, pw.VK_CONTROL, pw.VK_MENU, pw.VK_LWIN, pw.VK_RWIN)
 
 PASTE_SETTLE_S = 0.18        # time for the target app to consume the paste
@@ -177,6 +204,7 @@ class Injector:
     def __init__(self, platform=None, sleep=time.sleep):
         self.platform = platform
         self.sleep = sleep
+        self._last = None            # last successful in-window injection
 
     def _plat(self):
         if self.platform is None:
@@ -201,6 +229,7 @@ class Injector:
         if mode == "paste" or (mode == "auto" and self._needs_paste(text)):
             ok, detail = paste_text(platform, text, append_trailing_space, self.sleep)
             if ok:
+                self._record(platform, "paste", text, append_trailing_space, guard)
                 return "typed", detail
             if mode == "paste":
                 return self._clipboard_only(platform, text, append_trailing_space)
@@ -209,6 +238,7 @@ class Injector:
         if mode != "paste":
             try:
                 if type_text(platform, text, append_trailing_space):
+                    self._record(platform, "type", text, append_trailing_space, guard)
                     return "typed", "typed"
             except Exception as e:
                 detail = str(e)
@@ -217,6 +247,7 @@ class Injector:
                     if not ok:
                         return self._clipboard_only(platform, text,
                                                     append_trailing_space)
+                    self._record(platform, "paste", text, append_trailing_space, guard)
                     return "typed", f"pasted after type error ({detail})"
         return self._clipboard_only(platform, text, append_trailing_space)
 
@@ -224,6 +255,66 @@ class Injector:
     def _needs_paste(text):
         body = text.strip()
         return "\n" in body or len(body) > MULTILINE_THRESHOLD
+
+    # ------------------------------------------------------------- undo (Phase 8)
+    def _record(self, platform, method, text, append_trailing_space, guard):
+        """Remember the text that just entered a window (in memory only).
+
+        Only calls that actually put text in the window record a entry — a
+        clipboard-only fallback changes nothing on screen, so there is
+        nothing for undo to remove. `hwnd` is the window the text landed in:
+        the guard's snapshot when available, else the current foreground.
+        """
+        body = text + (" " if append_trailing_space else "")
+        hwnd = getattr(guard, "hwnd", None) if guard is not None else None
+        if hwnd is None:
+            try:
+                hwnd = platform.get_foreground_window()
+            except Exception:
+                hwnd = None
+        self._last = {"method": method, "length": len(code_units(body)),
+                      "text": body, "ts": time.time(), "hwnd": hwnd}
+
+    def undo_last(self, platform=None):
+        """Remove the last injection if it is still safe to do so.
+
+        Returns `(ok, code)` — `sent` on success, otherwise why not:
+        `nothing` (no record), `window` (foreground window changed or the
+        target was never known), `stale` (older than UNDO_MAX_AGE_S), `held`
+        (modifier keys still down — Backspace under Ctrl deletes words),
+        `send` (SendInput refused). A refusal keeps the record so the user
+        can alt-tab back and retry inside the 30 s window; a success clears
+        it so a second undo can never delete text the user typed themselves.
+        """
+        rec = self._last
+        if not rec:
+            return False, "nothing"
+        platform = platform or self._plat()
+        try:
+            current = platform.get_foreground_window()
+        except Exception:
+            current = None
+        if rec.get("hwnd") is None or current != rec["hwnd"]:
+            return False, "window"
+        if time.time() - rec.get("ts", 0.0) > UNDO_MAX_AGE_S:
+            return False, "stale"
+        # A chord just fired, so Ctrl/Alt may still be physically down:
+        # sending Backspaces then would delete whole words (W3.1's guard).
+        if not wait_for_modifiers_released(platform, sleep=self.sleep):
+            return False, "held"
+        if rec["method"] == "paste":
+            ctrl = _vk_inputs(pw.VK_CONTROL)     # down…up around Z
+            ok = _send(platform, ctrl[:1] + _vk_inputs(VK_Z) + ctrl[1:])
+        else:
+            ok = True
+            for start in range(0, rec["length"], TYPE_BATCH):
+                chunk = _vk_inputs(VK_BACK) * min(TYPE_BATCH,
+                                                  rec["length"] - start)
+                ok = _send(platform, chunk) and ok
+        if not ok:
+            return False, "send"
+        self._last = None
+        return True, "sent"
 
     def _clipboard_only(self, platform, text, append_trailing_space):
         """Last-resort path: return (status, detail) — never lose the text."""

@@ -24,7 +24,9 @@ DEFAULT_SETTINGS = {
     "hotkey": "f9",
     "hotkey_mode": "hold",              # hold | toggle (toggle = Phase 8)
     "swallow_hotkey": True,
+    "undo_chord": "off",                # off | ctrl+alt+scroll_lock | ctrl+alt+pause
     "stt_model": "base.en",
+    "stt_fp16": "auto",                # auto = half-precision only on CUDA GPUs
     "ollama_model": "llama3.2",
     "ai_cleanup_mode": "smart",         # smart | always | off
     "smart_min_words": 40,
@@ -53,6 +55,14 @@ DEFAULT_SETTINGS = {
 # --- Audio / transcription constants ---
 SAMPLE_RATE = 16000          # ASR requires 16 kHz
 LANGUAGE = "en"              # forced language (prevents e.g. German misdetection)
+FASTER_VAD_DEFAULT = False          # optional VAD for the faster-whisper backend
+
+# Silence auto-stop (W2.1 / Phase 8): `silence_autostop_ms` is 0 (off) or a
+# window in this range. Lives here so settings.py (validation) and recorder.py
+# (the detector) cannot drift apart.
+SILENCE_OFF = 0
+SILENCE_AUTOSTOP_MIN_MS = 500
+SILENCE_AUTOSTOP_MAX_MS = 5000
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_CHAT_URL = f"{OLLAMA_BASE_URL}/api/chat"
 OLLAMA_TAGS_URL = f"{OLLAMA_BASE_URL}/api/tags"
@@ -80,7 +90,7 @@ The transcript below was spoken out loud, so it may contain filler words, repeti
 
 Rules:
 1. Apply spoken self-corrections: if the speaker cancels, changes, or replaces something they said, apply that change in the output.
-2. Remove filler words ("um", "uh", "like", "you know"), repetitions, and false starts.
+2. Remove filler words ("um", "uh", "you know") and filler uses of "like" ("I was like thinking", "it was, like, good"). NEVER remove "like" when it is a real verb ("I like pizza") or a comparison ("runs like the wind"). Remove repetitions and false starts.
 3. Fix grammar, punctuation, and capitalization.
 4. If the speaker enumerates items for a list, output the final items as a clean list, one item per line prefixed with "- ".
 5. Preserve the speaker's exact meaning and perspective: keep words like "my", "I", "me" exactly as spoken. Do not change pronouns.
@@ -134,7 +144,12 @@ I bought apples, oranges and pears at the market.
 Example 9
 Input: I was thinking about the project you know
 Output:
-I was thinking about the project."""
+I was thinking about the project.
+
+Example 10
+Input: I like the pizza place um it's like really good
+Output:
+I like the pizza place. It's really good."""
 
 
 def load_settings(path=None):

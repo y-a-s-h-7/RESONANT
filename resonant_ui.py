@@ -44,6 +44,8 @@ POLL_MS = 100
 POLL_HIDDEN_MS = 500
 PULSE_MS = 1100
 NOTICE_MS = 2400
+# Cycle order for the silence auto-stop window (first entry = off).
+SILENCE_OPTIONS = (0, 1000, 1500, 2000, 3000, 5000)
 DROP_GAP = 0.6
 
 STATUS_GLYPH = {
@@ -279,6 +281,25 @@ class ResonantUI:
         self.paste_btn = self._toggle_btn(prow, "Typing", self._cycle_inject, col=False)
         self.space_btn = self._toggle_btn(prow, "Trailing space",
                                           self._toggle_trailing_space)
+        # Silence auto-stop (Phase 8): off by default, then a cycle of windows.
+        arow = tk.Frame(st, bg=CARD)
+        arow.pack(fill="x", padx=14, pady=(0, 4))
+        self.silence_btn = self._toggle_btn(arow, "Silence stop: Off",
+                                            self._cycle_silence_stop)
+        self.silence_hint = tk.Label(arow,
+                                     text="auto-ends a dictation when you stop talking",
+                                     fg=MUT, bg=CARD, font=(FONT, 8))
+        self.silence_hint.pack(side="left")
+        # Undo last dictation (Phase 8): off by default, choose a chord that does
+        # not clash with common app shortcuts (Ctrl+Shift+Z is redo everywhere).
+        urow = tk.Frame(st, bg=CARD)
+        urow.pack(fill="x", padx=14, pady=(0, 8))
+        self.undo_btn = self._toggle_btn(urow, "Undo: Off",
+                                         self._cycle_undo_chord)
+        self.undo_hint = tk.Label(urow,
+                                  text="Ctrl+Z for paste, Backspace for typed text",
+                                  fg=MUT, bg=CARD, font=(FONT, 8))
+        self.undo_hint.pack(side="left")
         mrow = tk.Frame(st, bg=CARD)
         mrow.pack(fill="x", padx=14, pady=(2, 8))
         tk.Label(mrow, text="Accuracy:", fg=MUT, bg=CARD,
@@ -525,6 +546,23 @@ class ResonantUI:
             text=f"Trailing space: {'On' if st.get('append_trailing_space') else 'Off'}",
             bg=CARD2 if st.get("append_trailing_space") else CARD,
             fg=GREEN if st.get("append_trailing_space") else MUT)
+        try:
+            silence = int(st.get("silence_autostop_ms", 0) or 0)
+        except (TypeError, ValueError):
+            silence = 0
+        self.silence_btn.configure(
+            text="Silence stop: " + (f"{silence / 1000:g} s" if silence else "Off"),
+            bg=CARD2 if silence else CARD,
+            fg=GREEN if silence else MUT)
+        undo_label = ((self.engine.settings.get("undo_chord") or "off").lower()
+                      or "off")
+        undo_text = (undo_label.replace("_", " ").replace("ctrl", "Ctrl")
+                     .replace("alt", "Alt").replace("scroll_lock", "Scroll Lock")
+                     .title() if undo_label != "off" else "Off")
+        self.undo_btn.configure(
+            text=f"Undo: {undo_text}",
+            bg=CARD2 if undo_label != "off" else CARD,
+            fg=GREEN if undo_label != "off" else MUT)
 
         if self.model_var.get() != st.get("stt_model"):
             self.model_var.set(st.get("stt_model", ""))
@@ -685,6 +723,19 @@ class ResonantUI:
             {"append_trailing_space":
              not self.engine.settings.get("append_trailing_space", True)})
 
+    def _cycle_silence_stop(self):
+        current = self.engine.settings.get("silence_autostop_ms", 0)
+        index = SILENCE_OPTIONS.index(current) if current in SILENCE_OPTIONS else 0
+        self.engine.apply_settings(
+            {"silence_autostop_ms": SILENCE_OPTIONS[(index + 1) % len(SILENCE_OPTIONS)]})
+
+    def _cycle_undo_chord(self):
+        """Cycle through the offered undo chords, ending back at off."""
+        current = (self.engine.settings.get("undo_chord") or "off").lower()
+        order = ["off", "ctrl+alt+scroll_lock", "ctrl+alt+pause"]
+        nxt = order[(order.index(current) + 1) % len(order)]
+        self.engine.apply_settings({"undo_chord": nxt})
+
     def _cycle_inject(self):
         order = ["auto", "type", "paste"]
         current = self.engine.settings.get("inject_mode", "auto")
@@ -829,6 +880,16 @@ def create_tray(engine, ui):
     def clear_all(icon, item):
         ui.root.after(0, ui._clear_all)
 
+    def undo_last(icon, item):
+        ui.root.after(0, engine.undo_last_dictation)
+
+    def undo_enabled(item):
+        """The chord is off by default; the menu item shows the configured chord."""
+        chord = engine.settings.get("undo_chord", "off") or "off"
+        if chord == "off":
+            return "Undo last dictation — disabled"
+        return f"Undo last dictation ({chord})"
+
     def toggle_startup(icon, item):
         """pystray passes the menu item; `item.checked` is the CURRENT state."""
         enabled = not bool(item.checked)
@@ -855,6 +916,7 @@ def create_tray(engine, ui):
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(listen_label, toggle_listen),
         pystray.MenuItem(mode_label, toggle_mode),
+        pystray.MenuItem(undo_enabled, undo_last),
         pystray.MenuItem("Copy last dictation", copy_last),
         pystray.MenuItem("Clear history & logs", clear_all),
         pystray.Menu.SEPARATOR,

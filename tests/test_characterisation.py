@@ -134,6 +134,37 @@ class TestSettingsMerge:
         assert s["smart_min_words"] == 40
         assert any("smart_min_words" in n for n in settings.LAST_NOTICES)
 
+    def test_stt_fp16_defaults_to_auto(self, tmp_path):
+        s, _ = self._load(tmp_path)
+        assert s["stt_fp16"] == "auto"
+
+    def test_stt_fp16_accepts_auto_true_false(self, tmp_path):
+        for value in ("auto", True, False):
+            s, _ = self._load(tmp_path, {"stt_fp16": value})
+            assert s["stt_fp16"] == value
+
+    def test_stt_fp16_rejects_junk_with_notice(self, tmp_path):
+        s, _ = self._load(tmp_path, {"stt_fp16": "sometimes"})
+        assert s["stt_fp16"] == "auto"                 # falls back to the default
+        assert any("stt_fp16" in n for n in settings.LAST_NOTICES)
+
+    def test_silence_autostop_defaults_to_off(self, tmp_path):
+        s, _ = self._load(tmp_path)
+        assert s["silence_autostop_ms"] == 0
+
+    def test_silence_autostop_accepts_zero_and_deliberate_windows(self, tmp_path):
+        for value in (0, 500, 2000, 5000):
+            s, _ = self._load(tmp_path, {"silence_autostop_ms": value})
+            assert s["silence_autostop_ms"] == value
+
+    def test_silence_autostop_rejects_out_of_range_and_junk(self, tmp_path):
+        for value in (499, 5001, -1, True, "500", None):
+            del settings.LAST_NOTICES[:]
+            s, _ = self._load(tmp_path, {"silence_autostop_ms": value})
+            assert s["silence_autostop_ms"] == 0        # falls back to off
+            assert any("silence_autostop_ms" in n
+                       for n in settings.LAST_NOTICES), value
+
     def test_legacy_full_dump_is_migrated_and_backed_up(self, tmp_path):
         path = tmp_path / "settings.json"
         path.write_text(json.dumps({

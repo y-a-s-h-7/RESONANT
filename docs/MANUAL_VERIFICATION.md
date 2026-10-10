@@ -106,6 +106,55 @@ Tick marks: `[ ]` = not yet verified, `[x]` = verified by the owner.
 - [ ] Quick Narrator/NVDA pass: note the Tk limitations; the pill, tray tooltip,
       blips and toasts are the alternatives (W5.7).
 
+## Injection & clipboard
+
+- [ ] Copy an image and some text, dictate, then paste: the previous clipboard
+      comes back (W3.1).
+- [ ] Win+V history and cloud clipboard do **not** contain the dictation
+      (W3.1, _verify_).
+- [ ] Put the mouse in a screen corner: text still types (W3.1).
+- [ ] Type `é`, `’`, `—` and an emoji: they arrive intact (W3.1).
+- [ ] Dictate a bullet list into Slack/Teams/WhatsApp Web: it does not send a
+      message per line (W3.1).
+- [ ] Alt-Tab during processing: the text is **not** pasted into the wrong
+      window — it lands on the clipboard with a notice (W3.2).
+- [ ] Dictate into an elevated window: a clear notice, no silent loss
+      (W3.2, _verify_).
+- [ ] Turn `append_trailing_space` off and dictate into a URL bar / code editor:
+      no stray space (W3.3).
+
+## Undo last dictation (Phase 8)
+
+- [ ] Toggle the **Undo** switch on and set it to **Ctrl+Alt+Scroll Lock** / **Ctrl+Alt+Pause**; the tray item label updates to show the chosen chord; the tray item + chord + tray-icon title should all agree.
+- [ ] With the chord enabled, dictate into Notepad: the text appears, then press the chord. The last dictation disappears and the pill/toast says "Last dictation undone".
+- [ ] With the chord enabled, dictate, then Alt-Tab away (so the foreground window changed): the chord should do nothing (or the tray item should show a clear "window changed" notice).
+- [ ] With the chord enabled, dictate, wait 31 s, then press the chord: the notice should say it is too old.
+- [ ] With the chord enabled, dictate, then *without* the chord, type something yourself, then press the chord: the undo must never reach further back than the last dictation — it removes the prompted text only if the window and 30 s still match.
+- [ ] Undo backed by **Ctrl+Z**: confirm the host app's own Ctrl+Z undo of remembered text works as expected after Resonant undoes (i.e. the two undo stacks do not fight). _verify_ per app.
+- [ ] Undo of **surrogate-pair text** (emoji, CJK outside BMP): undo removes exactly the characters that were sent.
+- [ ] Undo while a modifier (Shift/Ctrl/Alt/Win) is still physically down: Backspace path must refuse (would delete whole words) and explain why; Ctrl+Z path must not paste a redo into the wrong app.
+- [ ] Undo with no prior dictation: notice says "Nothing to undo".
+- [ ] Undo into an **elevated** window: a clear notice, no silent loss, no double-Ctrl+Z (W3.2, _verify_).
+- [ ] Undo while Resonant is **hidden to the tray**: tray balloon should still say what happened.
+
+## Lifecycle
+
+- [ ] Sign out and back in: Resonant starts **hidden** (W4.2).
+- [ ] Remove the entry (Task Manager → Startup, or Autoruns): it stays removed
+      after a restart of the app (W4.2).
+- [ ] First run on a clean profile: the "start at sign-in?" banner appears once
+      (W4.2).
+- [ ] Launch a second copy: the first window comes to front; nothing is killed
+      (W4.3).
+- [ ] Switch the accuracy model while offline: graceful failure, the old model
+      keeps working, and a restart still works (W4.5).
+- [ ] Stop Ollama mid-session: raw text is typed with a notice. Start it again:
+      recovery without restarting Resonant (W4.7).
+- [ ] Delete `settings.json`, restart: defaults from `config.py` come back with
+      no errors (W4.4).
+- [ ] Rename the app folder with `pythonw.exe` (no console): confirm failures
+      show a MessageBox and `app_error.log` (W4.1).
+
 ## Benchmarks (_verify_ after Ollama is started)
 
 - [ ] `python bench_editor.py --runs 3` with Ollama running: record the pass

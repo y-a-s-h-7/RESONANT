@@ -35,6 +35,7 @@ VK_CONTROL = 0x11
 VK_MENU = 0x12          # Alt
 VK_LWIN = 0x5B
 VK_RWIN = 0x5C
+VK_PAUSE = 0x13
 VK_SCROLL = 0x91
 VK_F9 = 0x78
 
@@ -66,6 +67,7 @@ class WinPlatform:
         self.winreg = winreg or _lazy_winreg()
         self.msvcrt = msvcrt or _lazy_msvcrt()
         self._clipboard_open = False
+        self._hook_proc = None        # keeps the CFUNCTYPE callback alive
 
     # ------------------------------------------------------------ binding
     def _bind_real(self):
@@ -81,13 +83,27 @@ class WinPlatform:
         return bool(self.user32.GetAsyncKeyState(vk) & 0x8000)
 
     def set_low_keyboard_hook(self, hook_proc):
-        """Install WH_KEYBOARD_LL. Returns the hook handle or None on failure."""
+        """Install WH_KEYBOARD_LL. Returns the hook handle or None on failure.
+
+        SetWindowsHookExW wants a real C function pointer: a plain Python
+        callable is rejected as c_void_p, so it is wrapped here and kept alive
+        on the instance for as long as Windows holds the hook (a collected
+        callback would crash the process).
+        """
         import ctypes
+        if hook_proc is None:
+            return None
         self.user32.SetWindowsHookExW.restype = ctypes.c_void_p
         self.user32.SetWindowsHookExW.argtypes = [
             ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+        proc = hook_proc
+        if not isinstance(hook_proc, ctypes._CFuncPtr):
+            proc_type = ctypes.WINFUNCTYPE(ctypes.c_void_p, ctypes.c_int,
+                                           ctypes.c_void_p, ctypes.c_void_p)
+            proc = proc_type(hook_proc)
+        self._hook_proc = proc            # anchor: GC would free the callback
         handle = self.user32.SetWindowsHookExW(
-            13, hook_proc, None, 0)   # 13 == WH_KEYBOARD_LL
+            13, proc, None, 0)   # 13 == WH_KEYBOARD_LL
         return handle or None
 
     def unhook_keyboard(self, handle):
@@ -182,6 +198,8 @@ class WinPlatform:
         self.kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
         self.kernel32.GlobalLock.restype = ctypes.c_void_p
         self.kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        self.kernel32.GlobalUnlock.restype = ctypes.c_int
+        self.kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
         handle = self.kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
         if not handle:
             return None
@@ -247,6 +265,14 @@ class WinPlatform:
         if not self.clipboard_open():
             return None
         try:
+            # HGLOBAL is a 64-bit pointer: declare it, or ctypes truncates the
+            # handle to a 32-bit int and GlobalLock crashes the process.
+            self.user32.GetClipboardData.restype = ctypes.c_void_p
+            self.user32.GetClipboardData.argtypes = [ctypes.c_uint]
+            self.kernel32.GlobalLock.restype = ctypes.c_void_p
+            self.kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+            self.kernel32.GlobalUnlock.restype = ctypes.c_int
+            self.kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
             h = self.user32.GetClipboardData(_CF_UNICODETEXT)
             if not h:
                 return None

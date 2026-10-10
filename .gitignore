@@ -35,6 +35,9 @@ htmlcov/
 *.flac
 bench_results/
 
+# Manual verification results (statuses only; never transcripts or audio)
+verification_results.json
+
 # Editor & OS artifacts
 .vscode/
 .idea/

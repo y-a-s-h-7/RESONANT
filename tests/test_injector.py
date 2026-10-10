@@ -122,6 +122,16 @@ class TestCodeUnits:
         raw = b"".join(u.to_bytes(2, "little") for u in units)
         assert raw.decode("utf-16-le") == text
 
+    def test_input_struct_matches_win32_size(self):
+        """SendInput rejects a wrong cbSize. 40 bytes on x64, 28 on x86.
+
+        Regression guard: the union used to omit MOUSEINPUT and pad to 24,
+        making INPUT 32 bytes on x64 — SendInput returned 0 and typing fell
+        back to the clipboard.
+        """
+        expected = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
+        assert ctypes.sizeof(injector.INPUT) == expected
+
 
 # ------------------------------------------------------------------ paste
 class TestPasteText:
@@ -225,6 +235,118 @@ class TestModifierWait:
     def test_returns_true_when_nothing_held(self):
         assert injector.wait_for_modifiers_released(FakePlatform(),
                                                     sleep=lambda _s: None)
+
+
+# ------------------------------------------------------------------ undo (Phase 8)
+class TestUndoLast:
+    def _pl(self):
+        return FakePlatform()
+
+    def _record(self, method="type", text="hi", append=True):
+        pl = self._pl()
+        inj = injector.Injector(platform=pl, sleep=lambda _s: None)
+        guard = injector.ForegroundGuard(pl)
+        guard.snapshot()
+        inj.inject(text, mode=method, append_trailing_space=append, guard=guard)
+        return inj, pl
+
+    def _undo(self, inj, pl=None):
+        pl = pl or self._pl()
+        return inj.undo_last(pl)
+
+    def test_undo_type_removes_the_text_via_backspace(self):
+        inj, pl = self._record("type", "hi", append=False)
+        ok, code = self._undo(inj, pl)
+        assert ok and code == "sent"
+        # One VK_BACK down+up per UTF-16 code unit: 2 units -> 4 INPUTs.
+        batch = pl.user32.batches[-1]
+        import platform_win as pw
+        assert [vk for vk, _scan, _flags in batch] == [injector.VK_BACK] * 4
+        assert sum(1 for _vk, _scan, flags in batch if flags & pw.KEYEVENTF_KEYUP) == 2
+        assert len(batch) == 4
+
+    def test_undo_type_removes_body_including_trailing_space(self):
+        inj, pl = self._record("type", "hi", append=True)   # body = "hi "
+        ok, code = self._undo(inj, pl)
+        assert ok and code == "sent"
+        batch = pl.user32.batches[-1]
+        # 3 UTF-16 units ("h", "i", " ") -> 6 INPUTs (down+up each).
+        assert len(batch) == 6
+
+    def test_undo_paste_sends_ctrl_z(self):
+        inj, pl = self._record("paste", "dictated\nlines", append=False)
+        ok, code = self._undo(inj, pl)
+        assert ok and code == "sent"
+        batch = pl.user32.batches[-1]
+        import platform_win as pw
+        vks = [b[0] for b in batch if not b[2] & pw.KEYEVENTF_KEYUP]
+        assents = [b[0] for b in batch if b[2] & pw.KEYEVENTF_KEYUP]
+        assert pw.VK_CONTROL in vks
+        assert injector.VK_Z in vks
+        assert pw.VK_CONTROL in assents
+
+    def test_undo_does_nothing_on_surrogate_text(self):
+        pl = self._pl()
+        inj = injector.Injector(platform=pl, sleep=lambda _s: None)
+        guard = injector.ForegroundGuard(pl)
+        guard.snapshot()
+        inj.inject("\U0001f642 hi", mode="type", append_trailing_space=True,
+                   guard=guard)
+        ok, _code = inj.undo_last(pl)
+        assert ok
+        # body = "🙂 hi " = 5 UTF-16 code units (emoji = 2, space, h, i) * 2 = 10 INPUTs.
+        batch = pl.user32.batches[-1]
+        assert len(batch) == 12   # 6 units * (down + up)
+
+    def test_undo_rejects_when_the_window_changed(self):
+        inj, pl = self._record("type", "hello")
+        pl.get_foreground_window = lambda: 999
+        ok, code = self._undo(inj, pl)
+        assert not ok and code == "window"           # record kept
+        assert inj._last is not None
+
+    def test_undo_rejects_when_stale(self):
+        inj, pl = self._record("type", "hello")
+        inj._last["ts"] -= injector.UNDO_MAX_AGE_S + 1
+        ok, code = self._undo(inj, pl)
+        assert not ok and code == "stale"
+
+    def test_undo_rejects_when_no_record(self):
+        ok, code = self._undo(injector.Injector(platform=self._pl()))
+        assert not ok and code == "nothing"
+
+    def test_undo_rejects_when_modifiers_held(self, monkeypatch):
+        pl = self._pl()
+        import platform_win as pw
+        monkeypatch.setattr(pl, "get_async_key_state",
+                             lambda vk, held=pw.VK_SHIFT: vk == held)
+        inj = injector.Injector(platform=pl, sleep=lambda _s: None)
+        guard = injector.ForegroundGuard(pl)
+        guard.snapshot()
+        inj.inject("hello", mode="type", guard=guard)
+        ok, code = inj.undo_last(pl)
+        assert not ok and code == "held"             # record kept
+
+    def test_undo_rejects_on_send_failure_kept(self):
+        class BadPastePlatform(FakePlatform):
+            def __init__(self):
+                super().__init__()
+                self.user32.SendInput = lambda *a, **k: 0   # Windows refuses all
+        pl = BadPastePlatform()
+        inj = injector.Injector(platform=pl, sleep=lambda _s: None)
+        guard = injector.ForegroundGuard(pl)
+        guard.snapshot()
+        inj.inject("hello\nthere", mode="paste", append_trailing_space=False,
+                   guard=guard)
+        ok, code = inj.undo_last(pl)
+        assert not ok and code == "send"
+        assert inj._last is not None                 # retry-able
+
+    def test_undo_clears_the_record_on_success(self):
+        inj, pl = self._record("type", "hello")
+        assert self._undo(inj, pl)
+        ok, code = self._undo(inj, pl)
+        assert not ok and code == "nothing"
 
 
 if __name__ == "__main__":

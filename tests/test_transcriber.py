@@ -87,17 +87,93 @@ class TestSegments:
         assert len(tr.filter_segments(segs)) == 1
 
 
+class FakeRunner:
+    """Captures the kwargs transcriber.transcribe hands to the STT model."""
+
+    def __init__(self):
+        self.kwargs = {}
+
+    def transcribe(self, audio, **kw):
+        self.kwargs = kw
+        return {"text": "", "segments": []}
+
+
 class TestTranscribeOpts:
-    def test_greedy_options_no_beam(self):
-        captured = {}
-        class FakeModel:
-            def transcribe(self, audio, **kw):
-                captured.update(kw)
-                return {"text": "", "segments": []}
-        tr.transcribe(FakeModel(), "audio", language="en")
-        assert "beam_size" not in captured and "best_of" not in captured
-        assert captured["temperature"] == 0
-        assert captured["condition_on_previous_text"] is False
+    def test_greedy_options_no_beam(self, monkeypatch):
+        monkeypatch.setattr(tr, "_use_fp16", lambda *a, **k: False)
+        model = FakeRunner()
+        tr.transcribe(model, "audio", language="en")
+        assert "beam_size" not in model.kwargs and "best_of" not in model.kwargs
+        assert model.kwargs["temperature"] == 0
+        assert model.kwargs["condition_on_previous_text"] is False
+        assert model.kwargs["fp16"] is False
+
+    def test_fp16_follows_helper_on_cpu_and_gpu(self, monkeypatch):
+        """`auto` uses exactly what the (fake) detector reports."""
+        model = FakeRunner()
+        monkeypatch.setattr(tr, "_use_fp16", lambda *a, **k: False)   # CPU
+        tr.transcribe(model, "audio", fp16="auto")
+        assert model.kwargs["fp16"] is False
+        monkeypatch.setattr(tr, "_use_fp16", lambda *a, **k: True)    # GPU
+        tr.transcribe(model, "audio", fp16="auto")
+        assert model.kwargs["fp16"] is True
+
+    def test_forced_false_disables_fp16(self):
+        """`stt_fp16: false` pins the CPU path without probing torch at all."""
+        model = FakeRunner()
+        tr.transcribe(model, "audio", fp16=False)
+        assert model.kwargs["fp16"] is False
+
+    def test_extra_kwargs_forwarded_to_model(self):
+        """Extra kwargs (e.g. vad_filter for the faster backend) forward through."""
+        model = FakeRunner()
+        tr.transcribe(model, "audio", fp16=False, vad_filter=None,
+                       initial_prompt="hello")
+        assert model.kwargs["vad_filter"] is None
+        assert model.kwargs["initial_prompt"] == "hello"
+        assert model.kwargs["fp16"] is False
+        assert model.kwargs["temperature"] == 0
+        assert model.kwargs["condition_on_previous_text"] is False
+
+
+class TestUseFp16:
+    """The detector itself must never import real torch (brief §1 rule 5)."""
+
+    def _fake_torch(self, monkeypatch, is_available):
+        import sys
+        import types
+        fake = types.ModuleType("torch")
+        fake.cuda = types.SimpleNamespace(is_available=lambda: is_available)
+        monkeypatch.setitem(sys.modules, "torch", fake)
+
+    def test_true_when_cuda_available(self, monkeypatch):
+        self._fake_torch(monkeypatch, True)
+        assert tr._use_fp16() is True
+
+    def test_false_when_cuda_unavailable(self, monkeypatch):
+        self._fake_torch(monkeypatch, False)
+        assert tr._use_fp16() is False
+
+    def test_false_when_torch_absent(self, monkeypatch):
+        import sys
+        monkeypatch.setitem(sys.modules, "torch", None)   # import -> ImportError
+        assert tr._use_fp16() is False
+
+    def test_false_when_cuda_probe_raises(self, monkeypatch):
+        import sys
+
+        class Broken:
+            @property
+            def cuda(self):
+                raise RuntimeError("cuda exploded")
+
+        monkeypatch.setitem(sys.modules, "torch", Broken())
+        assert tr._use_fp16() is False
+
+    def test_explicit_false_never_touches_torch(self, monkeypatch):
+        import sys
+        monkeypatch.setitem(sys.modules, "torch", None)
+        assert tr._use_fp16(False) is False
 
 
 if __name__ == "__main__":

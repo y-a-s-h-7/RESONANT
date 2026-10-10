@@ -5,6 +5,12 @@ sounddevice>=0.4.6
 requests>=2.31
 pystray>=0.19.5
 pillow>=10.0
+# ASR backend: the PyPI package is `openai-whisper`, but it imports as
+# `whisper` (see resonant_engine.load_models / resonant_cli). Installing it
+# pulls in torch automatically (multi-GB, CPU or CUDA build) — that is why it
+# is a runtime-only dependency and is deliberately absent from
+# requirements-dev.txt so the dev/test venv stays lightweight.
+openai-whisper>=20231117
 # NOTE: pyautogui and pyperclip are gone. Typing and clipboard work now go
 # through injector.py / platform_win.py using Win32 SendInput and the clipboard
 # API directly (unicode-safe, no FailSafeException, no 0.1 s per-key delay).

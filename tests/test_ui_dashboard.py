@@ -205,5 +205,57 @@ def test_notices_reach_the_pill_while_the_dashboard_is_hidden(monkeypatch,
         teardown(root)
 
 
+def test_silence_stop_control_cycles_valid_windows(monkeypatch, tmp_path):
+    root, ui, engine = build_ui(monkeypatch, tmp_path)
+    try:
+        ui._apply_state(engine.get_state())
+        assert engine.settings["silence_autostop_ms"] == 0
+        assert ui.silence_btn.cget("text") == "Silence stop: Off"
+
+        ui._cycle_silence_stop()
+        assert engine.settings["silence_autostop_ms"] == 1000
+        ui._apply_state(engine.get_state())
+        assert ui.silence_btn.cget("text") == "Silence stop: 1 s"
+
+        # Walk the whole ring: 1500, 2000, 3000, 5000, then back to off.
+        for expected in (1500, 2000, 3000, 5000, 0):
+            ui._cycle_silence_stop()
+            assert engine.settings["silence_autostop_ms"] == expected
+        ui._apply_state(engine.get_state())
+        assert ui.silence_btn.cget("text") == "Silence stop: Off"
+
+        # A value outside the ring must not break the cycle (defensive index).
+        engine.settings["silence_autostop_ms"] = 700
+        ui._cycle_silence_stop()
+        assert engine.settings["silence_autostop_ms"] == 1000
+    finally:
+        teardown(root)
+
+
+def test_undo_chord_control_cycles_valid_chords(monkeypatch, tmp_path):
+    root, ui, engine = build_ui(monkeypatch, tmp_path)
+    try:
+        ui._apply_state(engine.get_state())
+        assert engine.settings["undo_chord"] == "off"
+        assert ui.undo_btn.cget("text") == "Undo: Off"
+
+        ui._cycle_undo_chord()
+        assert engine.settings["undo_chord"] == "ctrl+alt+scroll_lock"
+        ui._apply_state(engine.get_state())
+        assert ui.undo_btn.cget("text") == "Undo: Ctrl+Alt+Scroll Lock"
+
+        ui._cycle_undo_chord()
+        assert engine.settings["undo_chord"] == "ctrl+alt+pause"
+        ui._apply_state(engine.get_state())
+        assert ui.undo_btn.cget("text") == "Undo: Ctrl+Alt+Pause"
+
+        ui._cycle_undo_chord()
+        assert engine.settings["undo_chord"] == "off"
+        ui._apply_state(engine.get_state())
+        assert ui.undo_btn.cget("text") == "Undo: Off"
+    finally:
+        teardown(root)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

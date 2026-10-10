@@ -29,6 +29,26 @@ class FakeModel:
 class FakePlatform:
     """Enough of the Win32 surface for the foreground guard to work offline."""
 
+    def __init__(self):
+        self.user32 = self._FakeUser32()
+
+    class _FakeUser32:
+        def __init__(self):
+            self.batches = []
+        def SendInput(self, count, ptr, size):
+            import ctypes
+
+            import injector as _inj
+
+            arr = ctypes.cast(ptr, ctypes.POINTER(_inj.INPUT))
+            self.batches.append([(arr[i].u.ki.wVk, arr[i].u.ki.wScan, arr[i].u.ki.dwFlags) for i in range(count)])
+            return count
+        def GetAsyncKeyState(self, vk):
+            return 0
+
+    def get_async_key_state(self, vk):
+        return False
+
     def get_foreground_window(self):
         return 4242
 
@@ -46,12 +66,14 @@ class FakeRecorder:
         self.audio = audio
         self.started = False
         self.released = False
+        self.start_kwargs = None          # captured for wiring assertions
         self.buffer = recorder_mod.RecordingBuffer()
         self.buffer.device_error = device_error
         self.buffer.device_fallback = fallback
 
     def start(self, **kwargs):
         self.started = True
+        self.start_kwargs = kwargs
         return self.buffer
 
     def release(self):
@@ -185,7 +207,7 @@ class TestModelSwitchSafety:
         def boom(name, *args, **kwargs):
             raise RuntimeError("offline")
 
-        stt = sys.modules.get("stt")
+        stt = sys.modules.get("whisper")
         monkeypatch.setattr(stt, "load_model", boom, raising=False)
         assert engine.load_models("small.en") is False
         assert engine.settings["stt_model"] == previous
@@ -201,7 +223,7 @@ class TestModelSwitchSafety:
             engine._load_gen += 1          # a newer request arrives meanwhile
             return FakeModel("stale-" + name)
 
-        monkeypatch.setattr(sys.modules["stt"], "load_model", slow_load,
+        monkeypatch.setattr(sys.modules["whisper"], "load_model", slow_load,
                             raising=False)
         assert engine.load_models("tiny.en") is False
 
@@ -290,6 +312,221 @@ class TestMicrophoneFailures:
         engine._on_press()
         engine._on_release()
         assert wait_for(lambda: "system default" in engine.notice.lower())
+
+
+class TestFp16Wiring:
+    def test_engine_forwards_stt_fp16_setting_to_transcriber(self):
+        engine = make_engine()
+        engine.settings["stt_fp16"] = False        # no torch probe needed
+        captured = {}
+
+        class CapturingModel:
+            def transcribe(self, audio, **kwargs):
+                captured.update(kwargs)
+                return {"text": "", "segments": []}
+
+        engine.stt_model = CapturingModel()
+        engine._transcribe(loud_audio(0.5))
+        assert captured["fp16"] is False
+
+    def test_engine_passes_language_and_vocabulary_alongside_fp16(self, monkeypatch):
+        engine = make_engine()
+        engine.settings["custom_vocabulary"] = ["Kubernetes"]
+        monkeypatch.setattr(resonant_engine.transcriber_mod, "_use_fp16",
+                            lambda *a, **k: False)
+        captured = {}
+
+        class CapturingModel:
+            def transcribe(self, audio, **kwargs):
+                captured.update(kwargs)
+                return {"text": "", "segments": []}
+
+        engine.stt_model = CapturingModel()
+        engine._transcribe(loud_audio(0.5))
+        assert captured["language"] == "en"
+        assert captured["initial_prompt"] == "Kubernetes"
+        assert captured["fp16"] is False
+
+    def test_engine_forwards_vad_filter_and_prompt_for_faster_backend(self):
+        """vad_filter and initial_prompt reach the model for the faster backend."""
+        engine = make_engine()
+        engine.settings["asr_backend"] = "faster"
+        engine.settings["custom_vocabulary"] = ["Kubernetes"]
+        engine.stt_model = engine.stt_model or None
+        captured = {}
+
+        class CapturingFasterModel:
+            def transcribe(self, audio, **kwargs):
+                captured.update(kwargs)
+                return {"text": "", "segments": []}
+
+        engine.stt_model = CapturingFasterModel()
+        engine._transcribe(loud_audio(0.5))
+        assert captured.get("vad_filter") is None
+        assert captured.get("initial_prompt") == "Kubernetes"
+        assert captured.get("language") == "en"
+        assert captured.get("fp16") is True             # auto -> True for faster
+
+    def test_engine_keeps_fp16_true_when_forced_for_faster_backend(self):
+        engine = make_engine()
+        engine.settings["asr_backend"] = "faster"
+        engine.settings["stt_fp16"] = True
+        captured = {}
+
+        class CapturingFasterModel:
+            def transcribe(self, audio, **kwargs):
+                captured.update(kwargs)
+                return {"text": "", "segments": []}
+
+        engine.stt_model = CapturingFasterModel()
+        engine._transcribe(loud_audio(0.5))
+        assert captured.get("fp16") is True
+        assert captured.get("vad_filter") is None
+
+
+class TestSmartDecisionState:
+    def test_state_exposes_text_free_smart_decision_counts(self):
+        engine = make_engine()
+        counts = engine.get_state()["smart_decisions"]
+        assert set(counts) == {"smart_skips", "smart_llm_calls"}
+        # Telemetry only — no transcript content anywhere in the payload.
+        assert all(isinstance(v, int) for v in counts.values())
+
+
+class TestSilenceAutostopWiring:
+    """silence_autostop_ms reaches the recorder; the callback ends the take."""
+
+    def _start(self, engine):
+        engine._recorder = FakeRecorder(loud_audio())
+        engine.set_listening(True)
+        engine._on_press()
+        assert engine.is_recording is True
+        return engine._recorder.start_kwargs
+
+    def test_setting_and_callback_are_forwarded_to_recorder(self):
+        engine = make_engine()
+        engine.settings["silence_autostop_ms"] = 2000
+        kw = self._start(engine)
+        assert kw["silence_autostop_ms"] == 2000
+        assert kw["on_silence"] == engine._on_silence_stop
+
+    def test_silence_autostop_is_off_by_default(self):
+        engine = make_engine()                    # config default: 0
+        kw = self._start(engine)
+        assert kw["silence_autostop_ms"] == 0
+
+    def test_junk_setting_never_arms_the_detector(self):
+        engine = make_engine()
+        engine.settings["silence_autostop_ms"] = "soon"
+        assert engine._silence_autostop_ms() == 0
+
+    def test_silence_callback_finishes_recording_before_noticing(self):
+        """Pill shows a notice only when idle: finish FIRST, then notice."""
+        engine = make_engine()
+        engine._recorder = FakeRecorder(loud_audio())
+        engine.set_listening(True)
+        engine._on_press()
+        seen = []
+        engine.on("notice", lambda message, toast=True:
+                  seen.append((message, engine.is_recording))
+                  if message == "Stopped (silence)" else None)
+        engine._on_silence_stop()
+        assert engine.is_recording is False
+        assert seen == [("Stopped (silence)", False)]           # finish FIRST
+        assert engine.notice == "Stopped (silence)"
+        assert wait_for(lambda: engine.get_history())   # pipeline still runs
+
+    def test_silence_callback_is_inert_when_not_recording(self):
+        engine = make_engine()
+        engine._on_silence_stop()                  # e.g. stale callback
+        assert engine.notice == ""
+        assert engine.is_recording is False
+
+
+class FakeInjectorWithUndo:
+    """FakeInjector monkeypatched with an undo_last that routes to the real logic."""
+
+    def __init__(self, status="typed", detail="typed"):
+        from injector import Injector
+        real = Injector(platform=FakePlatform(), sleep=lambda _s: None)
+        self._real = real
+        self.status, self.detail = status, detail
+        self.calls = []
+
+    def inject(self, text, mode="auto", append_trailing_space=True, guard=None):
+        self.calls.append(text)
+        return self.status, self.detail
+
+    def undo_last(self, platform=None):
+        return self._real.undo_last(platform)
+
+
+class TestUndoChordWiring:
+    """The chord setting reaches the hotkey and the endpoint routes through Injector."""
+
+    def _engine(self, undo_chord="off", monkeypatch=None):
+        engine = make_engine()
+        if monkeypatch is not None:
+            captured = {}
+
+            def capture_start_hotkey():
+                engine._hotkey = resonant_engine.hotkey_mod.Hotkey(
+                    key=engine.settings.get("hotkey", "f9"),
+                    swallow_active=lambda: bool(engine.listening
+                                               and engine.models_ready
+                                               and engine.settings.get("swallow_hotkey")),
+                    on_press=engine._on_press,
+                    on_release=engine._on_release,
+                    on_emergency=engine._emergency_quit,
+                    undo_chord=undo_chord,
+                    on_undo=engine._on_undo,
+                    platform=FakePlatform(),
+                )
+                captured["vks"] = engine._hotkey._undo_vks
+                engine.hotkey_backend = "polling"
+            monkeypatch.setattr(engine, "_start_hotkey", capture_start_hotkey)
+        engine.set_listening(True)
+        if monkeypatch is not None:
+            engine._start_hotkey()
+        return engine, captured if monkeypatch is not None else None
+
+    def test_undo_chord_off_by_default(self, monkeypatch):
+        engine, cap = self._engine(monkeypatch=monkeypatch)
+        assert cap["vks"] is None
+
+    def test_undo_chord_setting_is_forwarded_to_hotkey(self, monkeypatch):
+        engine, cap = self._engine(undo_chord="ctrl+alt+scroll_lock",
+                                   monkeypatch=monkeypatch)
+        # VK_CONTROL=0x11, VK_MENU=0x12, VK_SCROLL=0x91.
+        assert cap["vks"] == (0x11, 0x12, 0x91)
+
+    def test_undo_endpoint_clears_the_record_and_notices(self, monkeypatch):
+        engine, _cap = self._engine(monkeypatch=monkeypatch)
+        engine._injector = FakeInjectorWithUndo()
+        engine._injector._real._last = {"method": "type", "length": 2,
+                                        "text": "hi", "ts": time.time(),
+                                        "hwnd": FakePlatform().get_foreground_window()}
+        ok = engine.undo_last_dictation()
+        assert ok
+        assert engine._injector._real._last is None
+        assert "undone" in engine.notice.lower()
+
+    def test_undo_endpoint_reports_window_changed(self, monkeypatch):
+        engine, _cap = self._engine(monkeypatch=monkeypatch)
+        engine._injector = FakeInjectorWithUndo()
+        engine._injector._real._last = {"method": "type", "length": 2,
+                                        "text": "hi", "ts": time.time(),
+                                        "hwnd": 1234}
+        ok = engine.undo_last_dictation()
+        assert not ok
+        assert "window changed" in engine.notice.lower()
+
+    def test_undo_endpoint_reports_nothing_to_undo(self, monkeypatch):
+        engine, _cap = self._engine(monkeypatch=monkeypatch)
+        engine._injector = FakeInjectorWithUndo()
+        ok = engine.undo_last_dictation()
+        assert not ok
+        assert "nothing to undo" in engine.notice.lower()
 
 
 class TestNotices:

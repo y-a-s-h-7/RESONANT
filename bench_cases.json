@@ -81,5 +81,138 @@
     "input": "shopping list: first apples, second bananas, actually cancel the bananas",
     "must_not_include": ["banana"],
     "must_include_ci": ["apples"]
+  },
+  {
+    "name": "like_verb_kept",
+    "input": "I like pizza and I like pasta",
+    "expect_exact": "I like pizza and I like pasta."
+  },
+  {
+    "name": "like_comparison_kept",
+    "input": "the new build runs like the wind compared to the old one",
+    "expect_exact": "The new build runs like the wind compared to the old one."
+  },
+  {
+    "name": "like_verb_kept_filler_removed",
+    "input": "I like the plan but um the timeline is like really tight",
+    "must_include_ci": ["i like the plan"],
+    "must_not_include": ["like really"],
+    "must_not_include_words": ["um"]
+  },
+  {
+    "name": "like_comma_filler_removed",
+    "input": "it was, like, the best demo we have given",
+    "must_not_include": [", like,"],
+    "must_include_ci": ["best demo"]
+  },
+  {
+    "name": "like_gerund_filler_removed",
+    "input": "so I was like thinking we should ship on Friday",
+    "must_include_ci": ["ship on friday"],
+    "must_not_include_words": ["like"]
+  },
+  {
+    "name": "like_in_clean_sentence_kept",
+    "input": "I like the new logo",
+    "expect_exact": "I like the new logo."
+  },
+  {
+    "name": "like_to_verb_kept",
+    "input": "I would like to book the room for Tuesday",
+    "must_include": ["would like to book", "Tuesday"]
+  },
+  {
+    "name": "wait_a_second_not_list",
+    "input": "wait a second, the deploy is still running",
+    "must_include_ci": ["still running"],
+    "must_not_include": ["- "]
+  },
+  {
+    "name": "second_option_not_list",
+    "input": "the second option looks cheaper but slower",
+    "must_include_ci": ["second option"],
+    "must_not_include": ["- "]
+  },
+  {
+    "name": "first_time_not_list",
+    "input": "this is the first time we have seen this error",
+    "must_include_ci": ["first time"],
+    "must_not_include": ["- "]
+  },
+  {
+    "name": "next_week_not_list",
+    "input": "let's review it next week after the release",
+    "must_include_ci": ["next week"],
+    "must_not_include": ["- "]
+  },
+  {
+    "name": "one_second_not_list",
+    "input": "give me one second to finish this",
+    "must_include_ci": ["one second"],
+    "must_not_include": ["- "]
+  },
+  {
+    "name": "real_list_ordinals",
+    "input": "first review the pull request second update the docs third deploy to staging",
+    "must_include_ci": ["pull request", "docs", "staging"]
+  },
+  {
+    "name": "real_list_first_second_items",
+    "input": "I want a list. first item apples. second item pears. third item bread.",
+    "must_include_ci": ["apples", "pears", "bread"]
+  },
+  {
+    "name": "real_list_item_numbers",
+    "input": "three things item one fix the login bug item two add tests item three update the changelog",
+    "must_include_ci": ["login bug", "tests", "changelog"]
+  },
+  {
+    "name": "real_list_bullets",
+    "input": "please turn this into a bullet list: budget, timeline, risks",
+    "must_include_ci": ["budget", "timeline", "risks"]
+  },
+  {
+    "name": "list_with_spoken_correction",
+    "input": "add milk and eggs to the shopping list, scratch that remove the eggs",
+    "must_not_include_words": ["eggs"],
+    "must_include_ci": ["milk"]
+  },
+  {
+    "name": "correction_name_swap",
+    "input": "send the invoice to Alice scratch that to Bob today",
+    "expect_exact": "Send the invoice to Bob today."
+  },
+  {
+    "name": "correction_date_no_wait",
+    "input": "the meeting is Tuesday no wait Wednesday at ten",
+    "must_include_ci": ["wednesday"],
+    "must_not_include": ["Tuesday"]
+  },
+  {
+    "name": "correction_number_i_mean",
+    "input": "invite five people I mean six people to the review",
+    "must_include_ci": ["six"],
+    "must_not_include_words": ["five"]
+  },
+  {
+    "name": "correction_remove_item",
+    "input": "order the cables and the adapters actually remove the adapters",
+    "must_not_include_words": ["adapters"],
+    "must_include_ci": ["cables"]
+  },
+  {
+    "name": "clean_sentence_unchanged",
+    "input": "the report is ready and it is saved in the shared folder",
+    "expect_exact": "The report is ready and it is saved in the shared folder."
+  },
+  {
+    "name": "clean_question_preserved",
+    "input": "can you send me the notes from the call",
+    "expect_exact": "Can you send me the notes from the call?"
+  },
+  {
+    "name": "clean_sentence_name_preserved",
+    "input": "remind Priya to bring the projector tomorrow",
+    "expect_exact": "Remind Priya to bring the projector tomorrow."
   }
 ]

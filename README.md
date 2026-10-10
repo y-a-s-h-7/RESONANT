@@ -11,8 +11,17 @@
   <a href="#-architecture"><img src="https://img.shields.io/badge/LLM-Local%20Ollama-orange.svg" alt="Local Ollama"></a>
   <a href="#-privacy--security"><img src="https://img.shields.io/badge/privacy-100%25%20Local%20%2F%20Zero%20Cloud-success.svg" alt="100% Offline"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="#-development--testing"><img src="https://img.shields.io/badge/tests-155%20passed-brightgreen.svg" alt="Tests: 155 passed"></a>
+  <a href="https://github.com/y-a-s-h-7/RESONANT/actions/workflows/ci.yml"><img src="https://github.com/y-a-s-h-7/RESONANT/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
+
+<!-- DEMO GIF PLACEHOLDER
+  Hold F9 → speak → release → text appears at the cursor.
+  To enable: record a short silent screen capture, save it as docs/assets/demo.gif
+  (keep it under ~5 MB), then uncomment the block below and update the alt text.
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="Resonant demo: hold F9, speak, release — text appears at the cursor" width="720">
+</p>
+-->
 
 ---
 
@@ -52,13 +61,26 @@ flowchart LR
 
 - 🔒 **100% Local & Private**: No audio ever touches the cloud or disk. Transcripts are ephemeral unless you explicitly turn on diagnostic logging.
 - 🎙️ **Hold-to-Talk & Toggle Modes**: Push-to-talk by default, with a one-tap toggle mode for hands-free dictation or accessibility.
-- ⚡ **Hotkey Swallowing**: The hotkey is suppressed from reaching target apps while listening, preventing unintended keystrokes in VS Code, Excel, or browsers.
+- ⚡ **Hotkey Swallowing**: The hotkey is *designed to* be suppressed from reaching target apps while listening, preventing unintended keystrokes in VS Code, Excel, or browsers (*not yet verified on all apps* — see [Verification status](#-verification-status)).
 - 🧠 **Context-Aware AI Polish**: Powered by local Ollama models (e.g. `llama3.2`). Intelligently handles verbal corrections (e.g. *"Tuesday scratch that Wednesday"*), strips awkward fillers, and fixes punctuation.
 - 🪟 **Floating Visual Feedback**: An unobtrusive translucent pill appears near your cursor indicating live status (*Listening...*, *Transcribing...*, *Polishing...*).
-- 📋 **Guarded Clipboard Injection**: Short text is typed with native Win32 Unicode `SendInput`. Multi-line text is pasted via clipboard with Windows flags to prevent saving to Windows Clipboard History (`Win+V`) or cloud sync.
+- 📋 **Guarded Clipboard Injection**: Short text is typed with native Win32 Unicode `SendInput`. Multi-line text is pasted via clipboard with Windows flags *designed to* prevent saving to Windows Clipboard History (`Win+V`) or cloud sync (*not yet verified on all apps*).
 - 🔄 **Audio Device Resilience**: Select any input device from the dashboard. If the microphone is unplugged, Resonant seamlessly falls back to the system default microphone.
 - 📖 **Custom Vocabulary & Replacements**: Bias Whisper toward technical jargon and acronyms, and configure instant whole-word replacement rules.
 - 🩻 **Built-in Diagnostics**: Run `python resonant_cli.py doctor` for an instant audit of audio inputs, Ollama connectivity, Whisper models, and configuration.
+
+---
+
+## ✅ Verification Status
+
+Externally visible claims are verified by hand on real Windows apps. `python resonant_cli.py verify` walks [docs/MANUAL_VERIFICATION.md](docs/MANUAL_VERIFICATION.md), runs the automatable checks itself (keyboard hook install/uninstall, clipboard set/read/restore with the sequence-number guard, Unicode `SendInput` of `é` `’` `—` and an emoji into a temporary window it creates, default microphone), and records pass/fail/skip in `verification_results.json` (gitignored — statuses only, never transcripts or audio). The **Verified on** column is filled from a passing run (date · Windows version); until then the wording above stays in the *designed to … (not yet verified on all apps)* form.
+
+| Claim | Verified by | Verified on (date · Windows) |
+|---|---|---|
+| Hotkey is swallowed from target apps while listening | `verify` → *Capture & hotkey* | — *(not yet verified on all apps)* |
+| `é` `’` `—` and emoji type intact (Unicode `SendInput`) | `verify` automated check | — *(not yet verified on all apps)* |
+| Clipboard content is restored after a paste (sequence-number guarded) | `verify` automated check | — *(not yet verified on all apps)* |
+| Dictations stay out of `Win+V` history and cloud sync | `verify` → *Injection & clipboard* | — *(not yet verified on all apps)* |
 
 ---
 
@@ -79,8 +101,8 @@ flowchart LR
 ### 1. Clone the Repository
 
 ```powershell
-git clone https://github.com/yourusername/resonant.git
-cd resonant
+git clone https://github.com/y-a-s-h-7/RESONANT.git
+cd RESONANT
 ```
 
 ### 2. Set Up Virtual Environment & Dependencies
@@ -93,7 +115,7 @@ python -m venv .venv
 ```
 
 > [!TIP]
-> `torch` and `openai-whisper` will be downloaded into `.venv`. A dedicated GPU (NVIDIA CUDA) is automatically utilized by PyTorch and Ollama if available, but CPU inference also runs smoothly with small models.
+> `openai-whisper` (imported in code as `whisper`) will be downloaded into `.venv`, and it pulls in **PyTorch (`torch`)** as its own dependency — so both arrive from this one line in `requirements.txt`. A dedicated GPU (NVIDIA CUDA) is automatically utilized by PyTorch and Ollama if available, but CPU inference also runs smoothly with small models.
 
 ### 3. Pull a Local Ollama Model
 
@@ -144,7 +166,7 @@ The dashboard will open and a tray icon will appear near your taskbar clock. You
 
 ### Hotkey Swallowing & Windows Integrity (UIPI)
 
-- **Swallowing**: While Resonant is actively listening, the hotkey is suppressed via a low-level keyboard hook so it doesn't trigger actions in the foreground app.
+- **Swallowing**: While Resonant is actively listening, the hotkey is *designed to be* suppressed via a low-level keyboard hook so it doesn't trigger actions in the foreground app (*not yet verified on all apps*).
 - **Elevated Windows**: Due to Windows User Interface Privilege Isolation (UIPI), standard non-elevated applications cannot intercept or inject keystrokes into windows running as Administrator. Resonant intentionally operates unelevated for security. To dictate into elevated windows (e.g. an Admin PowerShell console), launch Resonant as Administrator.
 
 ---
@@ -174,13 +196,16 @@ Configuration defaults are defined in `config.py`. Any customizations made in th
 | `hotkey` | `"f9"` | Dictation key (`f1`–`f24`, `pause`, `caps_lock`). |
 | `hotkey_mode` | `"hold"` | `"hold"` = push-to-talk; `"toggle"` = tap to start, tap again to finish. |
 | `swallow_hotkey` | `true` | Suppresses hotkey from target applications while recording. |
-| `whisper_model` | `"base.en"` | Whisper model: `tiny.en`, `base.en`, `small.en` (or multilingual `base`, `small`). |
+| `stt_model` | `"base.en"` | Whisper model: `tiny.en`, `base.en`, `small.en` (or multilingual `base`, `small`). |
+| `stt_fp16` | `"auto"` | Half-precision inference: `"auto"` uses fp16 only on a CUDA GPU (≈2× faster); `true`/`false` force it. |
 | `ollama_model` | `"llama3.2"` | Model name running in your local Ollama instance. |
 | `ai_cleanup_mode` | `"smart"` | `"smart"` = LLM on demand; `"always"` = every phrase; `"off"` = raw Whisper only. |
 | `inject_mode` | `"auto"` | `"auto"` = Unicode typing for short single-line, clipboard paste for multi-line. |
 | `append_trailing_space` | `true` | Automatically adds a trailing space after typed text. |
 | `max_record_seconds` | `120` | Maximum recording safety limit (plays double blip on stop). |
 | `min_peak` | `0.01` | Silence gate threshold (lower for quiet microphones). |
+| `silence_autostop_ms` | `0` | Auto-stop after this much trailing silence: `0` = off, else `500`–`5000` ms (only after speech; pill shows "Stopped (silence)"). |
+| `undo_chord` | `"off"` | Chord + tray item to remove the last dictation: `"off"` (default), `"ctrl+alt+scroll_lock"`, or `"ctrl+alt+pause"`. Ctrl+Z for paste, Backspace × UTF-16 units for typed text, only while the foreground window is unchanged and within 30 s. |
 | `ollama_timeout_s` | `10` | Seconds to wait for Ollama before falling back to raw transcript. |
 | `input_device` | `null` | `null` for system default, or a specific audio device index. |
 | `custom_vocabulary` | `[]` | List of jargon/names to bias Whisper towards (e.g. `["Kubernetes", "PyTorch"]`). |
@@ -202,6 +227,10 @@ python resonant_cli.py clean "the meeting is Monday scratch that Tuesday"
 
 # Transcribe an audio file using Whisper
 python resonant_cli.py transcribe sample.wav
+
+# Interactive Windows verification walkthrough (writes verification_results.json;
+# --list, --auto and --all are available)
+python resonant_cli.py verify
 ```
 
 ### Command-Line Launch Flags
@@ -220,8 +249,8 @@ python resonant_cli.py transcribe sample.wav
 |---|---|
 | **Audio** | Processed entirely in RAM. **Never** written to disk. |
 | **Transcripts** | Ephemeral. Only logged if `log_transcripts: true` is explicitly enabled. |
-| **Local Files** | `settings.json` (only overrides), `resonant.log` (rotation at 512 KB), `.vt.lock` / `.vt.pid` (instance locks). |
-| **Clipboard** | When pasting multi-line text, existing clipboard content is preserved and restored. Content is marked with Windows flags (`CanIncludeInClipboardHistory=0`, `CanUploadToCloudClipboard=0`) to prevent saving to `Win+V` history or cloud sync. |
+| **Local Files** | `settings.json` (only overrides), `resonant.log` (rotation at 512 KB), `.vt.lock` / `.vt.pid` (instance locks), `verification_results.json` (verification statuses only — no transcripts or audio). |
+| **Clipboard** | When pasting multi-line text, existing clipboard content is preserved and restored. Content is marked with Windows flags (`CanIncludeInClipboardHistory=0`, `CanUploadToCloudClipboard=0`) *designed to* prevent saving to `Win+V` history or cloud sync (*not yet verified on all apps*). |
 | **Network** | Strictly local: `http://localhost:11434` (Ollama) and standard Whisper model download upon first run. Zero external calls, zero telemetry. |
 
 ---
@@ -250,7 +279,8 @@ Resonant is built with automated testing that decouples business logic from hard
 # Run linter
 .\.venv\Scripts\python.exe -m ruff check .
 
-# Run test suite (155 tests covering engine, settings, injector, recorder, and UI)
+# Run test suite (219 tests covering engine, settings, injector, recorder,
+# verification, and UI)
 .\.venv\Scripts\python.exe -m pytest -m "not ollama"
 
 # Run smoke test
@@ -288,8 +318,11 @@ Results are saved to `bench_results/` (automatically gitignored).
 ├── logging_setup.py     # Thread-safe rotating logging configuration
 ├── bench_editor.py      # LLM benchmark harness
 ├── run.bat              # Quick launcher with automatic .venv detection
+├── verification.py      # Manual + automated Windows verification walkthrough
+├── CONTRIBUTING.md      # PR checklist + GitHub repo setup checklist
+├── .github/workflows/   # CI: ruff + pytest on Windows (Python 3.11 & 3.13)
 ├── tests/               # Comprehensive unit and integration test suite
-└── docs/                # Architecture, verification checklists, and roadmap
+└── docs/                # Roadmap, verification checklists, and docs/archive/
 ```
 
 ---

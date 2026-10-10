@@ -30,8 +30,33 @@ PREAMBLE_RE = re.compile(
 CORRECTION_CUES = re.compile(
     r"\b(scratch that|strike that|delete that|never mind|no wait|actually|"
     r"i mean|instead|cancel|remove|replace|change it to|make it|no,)\b", re.IGNORECASE)
-LIST_CUES = re.compile(r"\b(first|second|third|fourth|next|list|item|bullet)\b", re.IGNORECASE)
-FILLER_CUES = re.compile(r"\b(um|uh|er|you know|like)\b", re.IGNORECASE)
+
+# Filler cues. "um"/"uh" are unambiguous; "like" is only a filler in
+# filler-shaped contexts ("um like", ", like,", "was like thinking"). As a
+# verb or a comparison ("I like pizza", "runs like the wind") it is real speech
+# and must never on its own trigger a rewrite.
+FILLER_CUES = re.compile(r"\b(?:um|uh|er|you know)\b", re.IGNORECASE)
+FILLER_LIKE_RE = re.compile(
+    r"\b(?:um|uh|er|you know)\s*,?\s*like\b"              # "um like", "uh, like"
+    r"|\b(?:was|were|is|are|am|be)\s+like\s+\w+ing\b"      # "was like thinking"
+    r"|,\s*like\s*,",                                       # "it was, like, good"
+    re.IGNORECASE,
+)
+
+# List cues only count as ENUMERATION. Bare "first"/"second"/"next" are far
+# too common in ordinary speech ("wait a second", "next week", "the first
+# time") to imply the speaker is dictating a list.
+LIST_CUES = re.compile(
+    r"\bfirst\b[\s\S]{0,120}?\bsecond\b"                  # "first ... second"
+    r"|\b(?:first|second|third|fourth|fifth)\s+"
+    r"(?:item|point|step|thing|bullet)s?\b"               # "first item"
+    r"|\bitems?\s+(?:one|two|three|four|five|\d+)\b"        # "item one"
+    r"|\bbullets?\b"
+    r"|\b(?:shopping|todo|to-do|task|check|grocery|packing)\s+list\b"
+    r"|\b(?:create|make|write|add|start|build)\s+(?:me\s+)?(?:a\s+|the\s+)?list\b"
+    r"|\blist\s*:",                                        # "list:"
+    re.IGNORECASE,
+)
 STUTTER_RE = re.compile(r"\b(\w{2,})( \1){1,}\b", re.IGNORECASE)
 
 TAG_RE = re.compile(r"</?transcript>", re.IGNORECASE)
@@ -73,6 +98,38 @@ def strip_tags_and_quotes(text):
     return t
 
 
+# ------------------------------------------------------- decision counters
+class DecisionCounts:
+    """In-memory smart-gate counters — transcript text is NEVER stored.
+
+    A skip is a smart-mode utterance the cue gate kept away from the LLM; an
+    llm_call is one the LLM actually processed. Other modes ("always"/"off")
+    are not counted, so the pair describes smart mode alone. Resets per
+    process: `resonant_cli.py doctor` runs in its own process and therefore
+    reports the counters of that run.
+    """
+
+    def __init__(self):
+        self.smart_skips = 0
+        self.smart_llm_calls = 0
+
+    def reset(self):
+        self.smart_skips = 0
+        self.smart_llm_calls = 0
+
+    def snapshot(self):
+        return {"smart_skips": self.smart_skips,
+                "smart_llm_calls": self.smart_llm_calls}
+
+
+DECISION_COUNTS = DecisionCounts()
+
+
+def decision_counts():
+    """Snapshot for engine state/diagnostics. No transcript content."""
+    return DECISION_COUNTS.snapshot()
+
+
 def should_use_llm(raw, mode="smart", min_words=40):
     """Smart gate: only spend LLM time when the utterance can benefit.
 
@@ -86,7 +143,8 @@ def should_use_llm(raw, mode="smart", min_words=40):
     if not raw or not raw.strip():
         return False
     return bool(CORRECTION_CUES.search(raw) or LIST_CUES.search(raw)
-                or FILLER_CUES.search(raw) or STUTTER_RE.search(raw)
+                or FILLER_CUES.search(raw) or FILLER_LIKE_RE.search(raw)
+                or STUTTER_RE.search(raw)
                 or word_count(raw) >= min_words)
 
 
@@ -217,7 +275,13 @@ def clean(raw, model="llama3.2", mode="smart", min_words=40,
     if not raw:
         return "", "dropped:empty"
 
-    if not should_use_llm(raw, mode, min_words):
+    use_llm = should_use_llm(raw, mode, min_words)
+    if mode == "smart":
+        if use_llm:
+            DECISION_COUNTS.smart_llm_calls += 1
+        else:
+            DECISION_COUNTS.smart_skips += 1
+    if not use_llm:
         return tidy(raw), "raw:skipped-llm"
 
     chunks = chunk_transcript(raw)

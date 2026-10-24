@@ -257,5 +257,59 @@ def test_undo_chord_control_cycles_valid_chords(monkeypatch, tmp_path):
         teardown(root)
 
 
+def test_custom_vocab_ui_add_remove_clear(monkeypatch, tmp_path):
+    root, ui, engine = build_ui(monkeypatch, tmp_path)
+    try:
+        ui._apply_state(engine.get_state())
+        assert engine.settings.get("custom_vocabulary") == []
+
+        # Add single word
+        ui.vocab_entry.insert(0, "Kubernetes")
+        ui._add_vocab()
+        assert "Kubernetes" in engine.settings["custom_vocabulary"]
+        assert ui.vocab_listbox.size() == 1
+
+        # Add comma-separated words
+        ui.vocab_entry.insert(0, "GraphQL, PyTorch")
+        ui._add_vocab()
+        assert len(engine.settings["custom_vocabulary"]) == 3
+        assert ui.vocab_listbox.size() == 3
+
+        # Remove selected item
+        ui.vocab_listbox.selection_set(0)
+        ui._remove_vocab()
+        assert len(engine.settings["custom_vocabulary"]) == 2
+
+        # Clear all
+        ui._clear_vocab()
+        assert engine.settings["custom_vocabulary"] == []
+        assert ui.vocab_listbox.size() == 0
+    finally:
+        teardown(root)
+
+
+def test_word_replacement_ui_add_remove(monkeypatch, tmp_path):
+    root, ui, engine = build_ui(monkeypatch, tmp_path)
+    try:
+        ui._apply_state(engine.get_state())
+
+        ui.rep_src_entry.insert(0, "vs code")
+        ui.rep_dst_entry.insert(0, "VS Code")
+        ui._add_replacement()
+
+        assert engine.settings["replacements"].get("vs code") == "VS Code"
+        assert ui.rep_listbox.size() == len(engine.settings["replacements"])
+
+        # Select and remove
+        for idx in range(ui.rep_listbox.size()):
+            if "vs code" in ui.rep_listbox.get(idx):
+                ui.rep_listbox.selection_set(idx)
+                break
+        ui._remove_replacement()
+        assert "vs code" not in engine.settings["replacements"]
+    finally:
+        teardown(root)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

@@ -90,6 +90,23 @@ class TestRecorder:
         assert r.max_hit is True and hit == [1]
         assert out is not None
 
+    def test_uncapped_recording_duration_when_max_seconds_zero(self):
+        class EndlessStream(FakeStream):
+            def _feed(self):
+                while self.closed is False:
+                    self.cb(chunk(), 800, None, None)
+                    time.sleep(0.005)
+        def fac(cb, sr, device):
+            return EndlessStream(cb, sr, device, [])
+        r = rec.Recorder(stream_factory=fac)
+        hit = []
+        r.start(max_seconds=0, on_max=lambda: hit.append(1))
+        time.sleep(0.05)
+        assert r.max_hit is False and hit == []
+        r.release()
+        out, _ = r.wait(timeout=2)
+        assert out is not None and r.max_hit is False
+
     def test_device_error_recorded(self):
         def bad_factory(cb, sr, device):
             raise OSError("mic busy")

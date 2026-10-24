@@ -12,12 +12,39 @@ thread on Windows).
 Everything heavy is imported INSIDE main(): with pythonw.exe a missing
 dependency used to make the app silently never start (W4.1).
 """
+import io
 import os
 import sys
 import threading
 import time
 
-_BASE = os.path.dirname(os.path.abspath(__file__))
+class _SafeStream(io.StringIO):
+    def write(self, s):
+        pass
+    def flush(self):
+        pass
+    def isatty(self):
+        return False
+
+if sys.stdout is None or not hasattr(sys.stdout, "write"):
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        sys.stdout = _SafeStream()
+
+if sys.stderr is None or not hasattr(sys.stderr, "write"):
+    try:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        sys.stderr = _SafeStream()
+
+if getattr(sys, "frozen", False):
+    _BASE = os.path.dirname(os.path.abspath(sys.executable))
+    _INTERNAL = getattr(sys, "_MEIPASS", os.path.join(_BASE, "_internal"))
+    if os.path.isdir(_INTERNAL) and _INTERNAL not in sys.path:
+        sys.path.insert(0, _INTERNAL)
+else:
+    _BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _BASE)
 
 CRASH_PATH = os.path.join(_BASE, "app_error.log")
@@ -77,6 +104,18 @@ def _read_prev_pid():
         return ""
 
 
+def _show_already_running_message():
+    try:
+        from platform_win import real_platform
+        real_platform().message_box(
+            "Resonant is already running.\n\n"
+            "Look for the Resonant icon in your system tray (near the clock, "
+            "or click the '^' hidden icons arrow) to open the dashboard.",
+            "Resonant", 0x40)
+    except Exception:
+        pass
+
+
 def _signal_running_instance():
     """Ask the already-running copy to show itself (W4.3). Returns True if it
     was reachable."""
@@ -86,19 +125,25 @@ def _signal_running_instance():
         handle = platform.make_or_open_event(SHOW_EVENT)
         if not handle:
             return False
-        return platform.signal_event(handle)
+        signaled = platform.signal_event(handle)
+        try:
+            platform.close_handle(handle)
+        except Exception:
+            pass
+        return signaled
     except Exception:
         return False
 
 
 def _is_verified_python(pid):
-    """Only kill a PID we can prove is a python(w).exe that is not newer than
-    the PID file — otherwise the PID was recycled (W4.3)."""
+    """Only kill a PID we can prove is a python(w).exe or resonant.exe that is
+    not newer than the PID file — otherwise the PID was recycled (W4.3)."""
     try:
         from platform_win import real_platform
         platform = real_platform()
         image = os.path.basename(platform.process_image_name(pid)).lower()
-        if image not in ("python.exe", "pythonw.exe"):
+        my_image = os.path.basename(sys.executable).lower()
+        if image not in ("python.exe", "pythonw.exe", "resonant.exe", my_image):
             return False
         created = platform.process_creation_time(pid)
         try:
@@ -126,8 +171,8 @@ def acquire_lock():
     PID lives in the never-locked `.vt.pid` (Windows byte-range locks block
     cross-process reads, so it cannot live inside the lock file).
 
-    A second launch first *asks* the running copy to show (named event). Only
-    if the lock is still held after ~3 s does it kill a VERIFIED python PID.
+    A second launch first asks the running copy to show itself (named event).
+    Only if the running copy is unresponsive does it kill a verified PID.
     """
     global _LOCK_HANDLE
     import msvcrt
@@ -146,16 +191,20 @@ def acquire_lock():
             raise SystemExit("Another Resonant is running (dev mode: not killing it).")
         if attempt == 0:
             if _signal_running_instance():
-                time.sleep(3)                      # give it time to exit
-                continue
+                from logging_setup import log
+                log("Another Resonant is running — signaled it to show dashboard.")
+                sys.exit(0)
             if prev.isdigit() and int(prev) != os.getpid():
                 if _kill_verified(prev):
                     time.sleep(1.5)
                     continue
+                _show_already_running_message()
                 raise SystemExit("Another Resonant is running and could not be "
                                  "asked to quit — close it from the tray.")
+            _show_already_running_message()
             raise SystemExit("Another Resonant is running — use the tray icon.")
         time.sleep(1)
+    _show_already_running_message()
     raise SystemExit("Could not take the instance lock.")
 
 
@@ -173,6 +222,8 @@ def main():
         del engine
         print("Resonant --smoke OK")
         log("--smoke OK: settings, engine and UI modules initialised.")
+        from logging_setup import shutdown as _shutdown_logging
+        _shutdown_logging()
         return 0
 
     install_excepthooks()
@@ -238,11 +289,14 @@ def main():
             startup.sync(engine.settings)
 
     engine.start()
+    _start_show_listener(ui)
 
     if "--hidden" in sys.argv:
         ui.hide()
     elif not engine.settings.get("startup_prompted"):
         ui.show_startup_prompt()
+    else:
+        ui.show()
 
     try:
         root.mainloop()
@@ -251,7 +305,40 @@ def main():
     finally:
         request_quit()
     log("Resonant exited cleanly.")
+    from logging_setup import shutdown as _shutdown_logging
+    _shutdown_logging()
     return 0
+
+
+_SHOW_EVENT_HANDLE = None
+
+
+def _start_show_listener(ui):
+    """Named event listener (Local\\Resonant.Show) to restore UI on 2nd launch (W4.3)."""
+    global _SHOW_EVENT_HANDLE
+    try:
+        from platform_win import real_platform
+        platform = real_platform()
+        handle = platform.create_event(SHOW_EVENT)
+        if not handle:
+            return
+        _SHOW_EVENT_HANDLE = handle
+
+        def _listener():
+            while not _SHUTTING_DOWN.is_set():
+                res = platform.wait_for_event(handle, 500)
+                if res == 0:  # WAIT_OBJECT_0
+                    ui.show()
+            try:
+                platform.close_handle(handle)
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_listener, daemon=True, name="show_listener")
+        t.start()
+    except Exception as e:
+        from logging_setup import log
+        log(f"Named event listener setup failed: {e}")
 
 
 def _set_dpi_awareness():
@@ -267,6 +354,8 @@ def _set_dpi_awareness():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     try:
         raise SystemExit(main())
     except SystemExit:

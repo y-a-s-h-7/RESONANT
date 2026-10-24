@@ -14,7 +14,13 @@ import re
 
 import requests
 
-from config import OLLAMA_CHAT_URL, REFUSAL_MARKERS, SYSTEM_PROMPT
+from config import (
+    DEFAULT_GROQ_API_KEY,
+    GROQ_CHAT_URL,
+    OLLAMA_CHAT_URL,
+    REFUSAL_MARKERS,
+    SYSTEM_PROMPT,
+)
 
 # ----------------------------------------------------------------- constants
 INVENTED_MAX = 0.25          # max share of output words absent from the input (>=6 words)
@@ -53,8 +59,11 @@ LIST_CUES = re.compile(
     r"|\bitems?\s+(?:one|two|three|four|five|\d+)\b"        # "item one"
     r"|\bbullets?\b"
     r"|\b(?:shopping|todo|to-do|task|check|grocery|packing)\s+list\b"
-    r"|\b(?:create|make|write|add|start|build)\s+(?:me\s+)?(?:a\s+|the\s+)?list\b"
-    r"|\blist\s*:",                                        # "list:"
+    r"|\b(?:create|make|write|add|start|build|give)\s+(?:me\s+)?(?:a\s+|the\s+)?.*?(?:list|items?|bullets?)\b"
+    r"|\b(?:containing|with|of)\s+items?\b"
+    r"|\bitems?\s*[:\-–]"
+    r"|\blist\s*:"
+    r"|\bshop\s+english\b",                                # common ASR error for "shopping list"
     re.IGNORECASE,
 )
 STUTTER_RE = re.compile(r"\b(\w{2,})( \1){1,}\b", re.IGNORECASE)
@@ -216,7 +225,7 @@ def tidy(raw):
 # ------------------------------------------------------------- LLM client
 def _ollama_chat(model, raw, timeout_s, keep_alive, ollama_url=OLLAMA_CHAT_URL,
                  session=None):
-    """Low-level call; returns (text, done_reason). Raises on transport errors.
+    """Low-level Ollama call; returns (text, done_reason). Raises on transport errors.
 
     `session` is an optional requests.Session (W4.7: connection reuse)."""
     client = session or requests
@@ -237,20 +246,80 @@ def _ollama_chat(model, raw, timeout_s, keep_alive, ollama_url=OLLAMA_CHAT_URL,
     return msg.strip(), data.get("done_reason", "")
 
 
+def _groq_chat(model, raw, timeout_s, keep_alive=None, groq_url=GROQ_CHAT_URL,
+               session=None, api_key=None):
+    """Low-level Groq API call (OpenAI-compatible chat completions)."""
+    if api_key is None:
+        api_key = DEFAULT_GROQ_API_KEY
+    if not api_key:
+        raise ValueError("Groq API key not configured")
+    client = session or requests
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}",
+        "Content-Type": "application/json",
+    }
+    models_to_try = [model or "qwen/qwen3.8-27b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b"]
+    seen = set()
+    last_err = None
+    for m in models_to_try:
+        if not m or m in seen:
+            continue
+        seen.add(m)
+        resp = client.post(groq_url, headers=headers, json={
+            "model": m,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"<transcript>{raw}</transcript>"},
+            ],
+            "temperature": 0,
+            "max_tokens": _num_predict_for(raw),
+        }, timeout=timeout_s)
+        status_code = getattr(resp, "status_code", 200)
+        resp_text = getattr(resp, "text", "")
+        if status_code in (400, 404) and "model_not_found" in resp_text:
+            last_err = resp
+            continue
+        resp.raise_for_status()
+        data = resp.json()
+        choices = data.get("choices") or []
+        if not choices:
+            return "", ""
+        msg = (choices[0].get("message") or {}).get("content", "")
+        reason = choices[0].get("finish_reason", "")
+        done_reason = DONE_REASON_LENGTH if reason == "length" else "stop"
+        return msg.strip(), done_reason
+    if last_err is not None:
+        last_err.raise_for_status()
+    return "", ""
+
+
 def _num_predict_for(raw):
     """Scale output budget with input (W1.1): short input can never need 200+
     tokens; long input must never be silently cut at a fixed cap."""
     return max(256, int(2.5 * word_count(raw)) + 64)
 
 
-def _clean_one(chunk, model, timeout_s, keep_alive, llm_fn, ollama_url, session=None):
+def _clean_one(chunk, model, timeout_s, keep_alive, llm_fn, url=None, session=None,
+               provider="groq", api_key=None):
     """LLM + guards for ONE chunk. Returns (text, status); text is always usable."""
+    if api_key is None and provider == "groq":
+        api_key = DEFAULT_GROQ_API_KEY
     try:
         if llm_fn is _ollama_chat:
-            out, done_reason = llm_fn(model, chunk, timeout_s, keep_alive,
-                                      ollama_url, session)
+            if provider == "groq":
+                out, done_reason = _groq_chat(model, chunk, timeout_s, keep_alive,
+                                              url or GROQ_CHAT_URL, session, api_key)
+            else:
+                out, done_reason = _ollama_chat(model, chunk, timeout_s, keep_alive,
+                                                url or OLLAMA_CHAT_URL, session)
         else:
-            out, done_reason = llm_fn(model, chunk, timeout_s, keep_alive, ollama_url)
+            effective_url = url or (GROQ_CHAT_URL if provider == "groq" else OLLAMA_CHAT_URL)
+            try:
+                out, done_reason = llm_fn(model, chunk, timeout_s, keep_alive,
+                                          effective_url, session)
+            except TypeError:
+                out, done_reason = llm_fn(model, chunk, timeout_s, keep_alive,
+                                          effective_url)
     except Exception:
         return tidy(chunk), "raw:llm-unavailable"
     if done_reason == DONE_REASON_LENGTH:
@@ -262,13 +331,15 @@ def _clean_one(chunk, model, timeout_s, keep_alive, llm_fn, ollama_url, session=
     return out, "cleaned"
 
 
-def clean(raw, model="llama3.2", mode="smart", min_words=40,
+def clean(raw, model="qwen/qwen3.8-27b", mode="smart", min_words=40,
           timeout_s=10, keep_alive="30m", llm_fn=_ollama_chat,
-          ollama_url=OLLAMA_CHAT_URL, session=None):
+          ollama_url=OLLAMA_CHAT_URL, session=None,
+          provider="groq", api_key=None, groq_url=GROQ_CHAT_URL):
     """Full pipeline. Returns (final_text, status) where status is one of:
     'cleaned' | 'raw:skipped-llm' | 'raw:llm-unavailable' | 'raw:truncated'
     | 'raw:guard-<reason>' | 'raw:mixed' | 'dropped:empty'.
 
+    Supports both local Ollama and cloud Groq providers.
     Never raises, never returns unusable text (§2 degrade-don't-lose).
     """
     raw = (raw or "").strip()
@@ -284,17 +355,18 @@ def clean(raw, model="llama3.2", mode="smart", min_words=40,
     if not use_llm:
         return tidy(raw), "raw:skipped-llm"
 
+    target_url = groq_url if provider == "groq" else ollama_url
     chunks = chunk_transcript(raw)
     if len(chunks) == 1:
         return _clean_one(chunks[0], model, timeout_s, keep_alive, llm_fn,
-                          ollama_url, session)
+                          target_url, session, provider=provider, api_key=api_key)
 
     # W1.5: chunks are cleaned independently; a failing chunk keeps its raw
     # text. Corrections spanning chunk boundaries may be missed (documented).
     parts, status = [], "cleaned"
     for chunk in chunks:
         text, st = _clean_one(chunk, model, timeout_s, keep_alive, llm_fn,
-                              ollama_url, session)
+                              target_url, session, provider=provider, api_key=api_key)
         parts.append(text)
         if st != "cleaned" and status == "cleaned":
             status = st

@@ -24,11 +24,22 @@ def _ensure_module(name, **attrs):
         return mod
 
 
+def _stub_module(name, **attrs):
+    if name not in sys.modules:
+        mod = types.ModuleType(name)
+        sys.modules[name] = mod
+    else:
+        mod = sys.modules[name]
+    for key, value in attrs.items():
+        setattr(mod, key, value)
+    return mod
+
+
 _ensure_module("sounddevice", play=lambda *a, **k: None, InputStream=object)
 # The ASR backend is OpenAI Whisper: PyPI distribution `openai-whisper`, which
 # imports as `whisper` and pulls in torch. Stub it under its real import name so
 # tests run without the multi-GB dependency.
-_ensure_module("whisper", load_model=lambda name: None)
+_stub_module("whisper", load_model=lambda name: None)
 
 # Faster-whisper backend (Phase 8): stubbed so tests that touch the faster
 # path never import the real CTranslate2 package in the light dev venv. The fake

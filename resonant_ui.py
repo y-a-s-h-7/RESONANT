@@ -24,21 +24,41 @@ from PIL import Image, ImageDraw, ImageTk
 
 import hotkey as hotkey_mod
 import startup
-from config import APP_NAME, LOG_PATH, SETTINGS_PATH
+from config import APP_NAME, DEFAULT_GROQ_API_KEY, LOG_PATH, SETTINGS_PATH
 from logging_setup import clear_log_files, log
 
-# --- Colors (single dark palette; contrast raised for accessibility) ---
-BG = "#0f1115"
-CARD = "#171a21"
-CARD2 = "#1f242e"
-LINE = "#2b3240"
-TXT = "#eef0f3"
-MUT = "#a2a9b6"
-GREEN = "#35d07f"
-GREEN_DK = "#1d8a4c"
-RED = "#ff5f52"
-AMBER = "#f5a524"
+# --- Colors (ultra-clean, modern dark aesthetic with electric indigo accent; ZERO green) ---
+BG = "#0c0e14"              # Deep slate-black canvas
+CARD = "#141722"            # Primary card surface
+CARD2 = "#1a1f2e"           # Secondary card & input surface
+CARD_HOVER = "#232a3d"      # Smooth hover surface
+LINE = "#222838"            # Subtle crisp border line
+LINE_LIGHT = "#2f384e"      # Subtle divider / card border
+TXT = "#f8fafc"             # High-contrast primary text
+MUT = "#8a94a7"             # Refined secondary/muted text
+DIM = "#566074"             # Tertiary / subtle text
+
+# Primary Accent: Modern Electric Indigo (replaces green entirely)
+ACCENT = "#6366f1"          # Indigo 500 (vibrant accent)
+ACCENT_HOVER = "#4f46e5"    # Indigo 600
+ACCENT_ACTIVE = "#4338ca"   # Indigo 700
+ACCENT_DK = "#4338ca"       # Deep indigo
+ACCENT_LIGHT = "#818cf8"    # Indigo 400 (for glow, text highlights, glyphs)
+ACCENT_BG = "#1c2035"       # Subtle tinted background for active toggles
+ACCENT_BORDER = "#3730a3"   # Subtle accent border
+
+# State indicators
+RED = "#f43f5e"             # Rose 500 (clean recording state)
+RED_PULSE = "#881337"       # Rose 900
+AMBER = "#f59e0b"           # Amber 500 (busy/processing)
+AMBER_BG = "#291e0a"
+
 FONT = "Segoe UI"
+FONT_MONO = "Consolas"
+
+# Aliases for backwards compatibility with any external scripts or tests
+GREEN = ACCENT_LIGHT
+GREEN_DK = ACCENT_ACTIVE
 
 POLL_MS = 100
 POLL_HIDDEN_MS = 500
@@ -70,15 +90,15 @@ def draw_icon(active=True, recording=False, error=False):
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     if error:
-        outline, color = (255, 95, 82, 255), (255, 95, 82, 255)
+        outline, color = (244, 63, 94, 255), (244, 63, 94, 255)
     elif recording:
-        outline, color = (255, 95, 82, 255), (255, 95, 82, 255)
+        outline, color = (244, 63, 94, 255), (244, 63, 94, 255)
     elif active:
-        outline, color = (53, 208, 127, 255), (53, 208, 127, 255)
+        outline, color = (99, 102, 241, 255), (99, 102, 241, 255)
     else:
-        outline, color = (138, 145, 158, 200), (150, 156, 168, 230)
+        outline, color = (86, 96, 116, 200), (90, 100, 120, 230)
     d.rounded_rectangle([2, 2, 62, 62], radius=16,
-                        fill=(23, 26, 33, 255), outline=outline, width=3)
+                        fill=(20, 23, 34, 255), outline=outline, width=3)
     for x, h in ((20, 16), (28, 30), (36, 22), (44, 12)):
         d.rounded_rectangle([x, 32 - h // 2, x + 4, 32 + h // 2], radius=2,
                             fill=color)
@@ -96,16 +116,17 @@ class Pill:
     EX_NOACTIVATE = 0x08000000
     EX_TOOLWINDOW = 0x00000080
 
-    def __init__(self, root):
+    def __init__(self, root, enabled=True):
         self.root = root
+        self.enabled = enabled
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
-        self.win.configure(bg=CARD, highlightbackground=GREEN, highlightthickness=1)
+        self.win.configure(bg=CARD, highlightbackground=ACCENT, highlightthickness=1)
         self.win.withdraw()
         self.inner = tk.Frame(self.win, bg=CARD)
-        self.inner.pack(padx=12, pady=7)
-        self.dot = tk.Label(self.inner, text="●", fg=RED, bg=CARD, font=(FONT, 10))
+        self.inner.pack(padx=14, pady=8)
+        self.dot = tk.Label(self.inner, text="●", fg=ACCENT_LIGHT, bg=CARD, font=(FONT, 10))
         self.dot.pack(side="left")
         self.label = tk.Label(self.inner, text="", fg=TXT, bg=CARD, font=(FONT, 10))
         self.label.pack(side="left", padx=(6, 0))
@@ -144,7 +165,10 @@ class Pill:
         except Exception:
             pass
 
-    def show(self, text, color=GREEN, auto_hide_ms=None):
+    def show(self, text, color=ACCENT_LIGHT, auto_hide_ms=None):
+        if not getattr(self, "enabled", True):
+            self.hide()
+            return
         if text != self._text:
             self._text = text
             self.label.configure(text=text)
@@ -195,16 +219,20 @@ class ResonantUI:
 
         root.title(APP_NAME)
         root.configure(bg=BG)
-        root.minsize(430, 520)
+        root.minsize(440, 560)
         root.resizable(True, True)
-        root.iconphoto(True, ImageTk.PhotoImage(draw_icon(True)))
+        try:
+            self._icon = ImageTk.PhotoImage(draw_icon(True), master=root)
+            root.iconphoto(True, self._icon)
+        except Exception:
+            pass
         root.protocol("WM_DELETE_WINDOW", self.hide)
         self._build()
         root.update_idletasks()
-        w = max(440, root.winfo_reqwidth())
-        h = max(560, root.winfo_reqheight())
+        w = max(450, root.winfo_reqwidth())
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-        root.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(20, (sh - h) // 3)}")
+        h = min(max(640, sh - 120), max(680, root.winfo_reqheight()))
+        root.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(20, (sh - h) // 4)}")
         self._poll()
 
     # ------------------------------------------------------------- layout
@@ -216,20 +244,27 @@ class ResonantUI:
     def _build(self):
         # Footer is packed FIRST so it can never be the clipped element (W5.5).
         foot = tk.Frame(self.root, bg=BG)
-        foot.pack(fill="x", side="bottom", pady=8)
-        self._button(foot, "Open log", self._open_log).pack(side="left", padx=8)
+        foot.pack(fill="x", side="bottom", pady=(4, 10), padx=16)
+        self._button(foot, "Open log", self._open_log).pack(side="left", padx=(0, 6))
         self._button(foot, "Clear history & logs", self._clear_all).pack(side="left")
-        self._button(foot, "Hide to tray", self.hide).pack(side="right", padx=8)
-        self.copied_lbl = tk.Label(foot, text="", fg=GREEN, bg=BG, font=(FONT, 9))
-        self.copied_lbl.pack(side="right", padx=6)
+        self._button(foot, "Hide to tray", self.hide).pack(side="right")
+        self.copied_lbl = tk.Label(foot, text="", fg=ACCENT_LIGHT, bg=BG, font=(FONT, 9, "bold"))
+        self.copied_lbl.pack(side="right", padx=10)
 
         head = tk.Frame(self.root, bg=BG)
-        head.pack(fill="x", pady=(14, 6), padx=20)
-        tk.Label(head, text=APP_NAME, fg=TXT, bg=BG,
+        head.pack(fill="x", pady=(14, 8), padx=20)
+        title_box = tk.Frame(head, bg=BG)
+        title_box.pack(side="left")
+        tk.Label(title_box, text=APP_NAME, fg=TXT, bg=BG,
                  font=(FONT, 19, "bold")).pack(side="left")
-        self.version_lbl = tk.Label(head, text="  voice → clean text, fully local",
+        # Subtle modern accent pill
+        badge = tk.Label(title_box, text="AI DICTATION", fg=ACCENT_LIGHT, bg=ACCENT_BG,
+                         font=(FONT, 7, "bold"), padx=6, pady=2)
+        badge.pack(side="left", padx=(10, 0), pady=(3, 0))
+
+        self.version_lbl = tk.Label(head, text="voice → clean text, fully local",
                                     fg=MUT, bg=BG, font=(FONT, 9))
-        self.version_lbl.pack(side="left", pady=(8, 0))
+        self.version_lbl.pack(side="right", pady=(4, 0))
 
         # First-run startup consent (W4.2) — non-blocking banner, hidden by default
         self.banner = tk.Frame(self.root, bg=CARD2)
@@ -240,47 +275,88 @@ class ResonantUI:
         self._button(self.banner, "No", lambda: self._startup_choice(False)).pack(
             side="right", pady=6)
 
+        # Scrollable container for cards
+        self.scroll_canvas = tk.Canvas(self.root, bg=BG, highlightthickness=0)
+        self.scroll_bar = tk.Scrollbar(self.root, orient="vertical", command=self.scroll_canvas.yview,
+                                       bg=CARD, troughcolor=BG, bd=0, highlightthickness=0, width=10)
+        self.scroll_content = tk.Frame(self.scroll_canvas, bg=BG)
+
+        self._canvas_win = self.scroll_canvas.create_window((0, 0), window=self.scroll_content, anchor="nw")
+
+        def _on_content_config(e):
+            self.scroll_canvas.configure(scrollregion=self.scroll_canvas.bbox("all"))
+
+        def _on_canvas_config(e):
+            self.scroll_canvas.itemconfig(self._canvas_win, width=e.width)
+
+        self.scroll_content.bind("<Configure>", _on_content_config)
+        self.scroll_canvas.bind("<Configure>", _on_canvas_config)
+        self.scroll_canvas.configure(yscrollcommand=self.scroll_bar.set)
+
+        def _on_mousewheel(e):
+            bbox = self.scroll_canvas.bbox("all")
+            if bbox and (bbox[3] - bbox[1]) > self.scroll_canvas.winfo_height():
+                self.scroll_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+
+        self.scroll_canvas.bind("<Enter>", lambda _e: self.scroll_canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        self.scroll_canvas.bind("<Leave>", lambda _e: self.scroll_canvas.unbind_all("<MouseWheel>"))
+
+        self.scroll_bar.pack(side="right", fill="y")
+        self.scroll_canvas.pack(side="left", fill="both", expand=True)
+
+        body = self.scroll_content
+
         # Status card
-        sc = self._card(self.root)
+        sc = self._card(body)
         row = tk.Frame(sc, bg=CARD)
-        row.pack(fill="x", padx=14, pady=12)
+        row.pack(fill="x", padx=14, pady=(12, 8))
         self.dot = tk.Canvas(row, width=16, height=16, bg=CARD, highlightthickness=0)
         self.dot.pack(side="left")
         self.status_lbl = tk.Label(row, text="Starting…", fg=TXT, bg=CARD,
                                    font=(FONT, 11, "bold"))
         self.status_lbl.pack(side="left", padx=10)
         self.hint_lbl = tk.Label(row, text="", fg=MUT, bg=CARD, font=(FONT, 9),
-                                 wraplength=200, justify="right")
+                                 wraplength=220, justify="right")
         self.hint_lbl.pack(side="right")
 
         self.meter = tk.Canvas(sc, width=370, height=6, bg=CARD, highlightthickness=0)
         self.meter.pack(fill="x", padx=14, pady=(0, 10))
 
-        # W5.2: this line is actually updated now
+        # W5.2: live transcript line
         self.live_lbl = tk.Label(sc, text="", fg=MUT, bg=CARD, font=(FONT, 9),
                                  wraplength=370, justify="left", anchor="w")
-        self.live_lbl.pack(fill="x", padx=14, pady=(0, 10))
+        self.live_lbl.pack(fill="x", padx=14, pady=(0, 12))
 
-        self.toggle_btn = tk.Button(self.root, font=(FONT, 11, "bold"),
+        self.toggle_btn = tk.Button(body, font=(FONT, 11, "bold"),
                                     relief="flat", cursor="hand2", bd=0,
-                                    activeforeground="#06130a",
+                                    activeforeground="#ffffff",
                                     command=self._toggle_listening)
-        self.toggle_btn.pack(fill="x", padx=16, pady=(2, 10), ipady=8)
+        self.toggle_btn.pack(fill="x", padx=16, pady=(2, 12), ipady=9)
         self._add_focus_ring(self.toggle_btn)
+        self._add_hover(self.toggle_btn, ACCENT_HOVER)
 
         # Settings card
-        st = self._card(self.root)
+        st = self._card(body)
         tk.Label(st, text="SETTINGS", fg=MUT, bg=CARD,
                  font=(FONT, 8, "bold")).pack(anchor="w", padx=14, pady=(10, 4))
         srow = tk.Frame(st, bg=CARD)
         srow.pack(fill="x", padx=14, pady=(0, 4))
         self.cleanup_btn = self._toggle_btn(srow, "AI cleanup", self._cycle_cleanup)
         self.sound_btn = self._toggle_btn(srow, "Sounds", self._toggle_sound)
+        lrow = tk.Frame(st, bg=CARD)
+        lrow.pack(fill="x", padx=14, pady=(0, 4))
+        self.provider_btn = self._toggle_btn(lrow, "LLM: Groq", self._cycle_provider)
+        self.groq_key_btn = self._button(lrow, "Groq Key", self._prompt_groq_key)
+        self.groq_key_btn.pack(side="left", padx=4)
+        self.provider_hint = tk.Label(lrow, text="", fg=MUT, bg=CARD, font=(FONT, 8))
+        self.provider_hint.pack(side="left", padx=4)
         prow = tk.Frame(st, bg=CARD)
         prow.pack(fill="x", padx=14, pady=(0, 6))
         self.paste_btn = self._toggle_btn(prow, "Typing", self._cycle_inject, col=False)
         self.space_btn = self._toggle_btn(prow, "Trailing space",
                                           self._toggle_trailing_space)
+        self.pill_btn = self._toggle_btn(prow, "Cursor bubble",
+                                         self._toggle_pill)
         # Silence auto-stop (Phase 8): off by default, then a cycle of windows.
         arow = tk.Frame(st, bg=CARD)
         arow.pack(fill="x", padx=14, pady=(0, 4))
@@ -304,7 +380,7 @@ class ResonantUI:
         mrow.pack(fill="x", padx=14, pady=(2, 8))
         tk.Label(mrow, text="Accuracy:", fg=MUT, bg=CARD,
                  font=(FONT, 9)).pack(side="left")
-        models = ["tiny.en", "base.en", "small.en"]
+        models = ["tiny.en", "base.en", "small.en", "medium.en"]
         current_model = self.engine.settings.get("stt_model")
         if current_model and current_model not in models:
             models.insert(0, current_model)
@@ -344,8 +420,95 @@ class ResonantUI:
                                  fg=MUT, bg=CARD, font=(FONT, 8))
         self.mic_hint.pack(side="left")
 
+        # Custom Vocab card
+        vc = self._card(body)
+        vhead = tk.Frame(vc, bg=CARD)
+        vhead.pack(fill="x", padx=14, pady=(10, 2))
+        tk.Label(vhead, text="CUSTOM VOCABULARY", fg=MUT, bg=CARD,
+                 font=(FONT, 8, "bold")).pack(side="left")
+        self.vocab_count_lbl = tk.Label(vhead, text="", fg=MUT, bg=CARD, font=(FONT, 8))
+        self.vocab_count_lbl.pack(side="right")
+
+        tk.Label(vc, text="Teach Whisper specific names, jargon, or acronyms to prioritize during transcription.",
+                 fg=MUT, bg=CARD, font=(FONT, 8), justify="left", anchor="w").pack(fill="x", padx=14, pady=(0, 6))
+
+        vinput_row = tk.Frame(vc, bg=CARD)
+        vinput_row.pack(fill="x", padx=14, pady=(0, 6))
+        self.vocab_entry = tk.Entry(vinput_row, bg=CARD2, fg=TXT, insertbackground=TXT,
+                                    font=(FONT, 9), relief="flat", highlightthickness=1,
+                                    highlightbackground=LINE, highlightcolor=ACCENT)
+        self.vocab_entry.pack(side="left", fill="x", expand=True, ipady=4, padx=(0, 8))
+        self.vocab_entry.bind("<Return>", lambda _e: self._add_vocab())
+
+        self.vocab_add_btn = self._button(vinput_row, "+ Add Word", self._add_vocab)
+        self.vocab_add_btn.pack(side="right")
+
+        vlist_frame = tk.Frame(vc, bg=CARD)
+        vlist_frame.pack(fill="x", padx=14, pady=(0, 6))
+        self.vocab_listbox = tk.Listbox(vlist_frame, bg=CARD2, fg=TXT, selectbackground=ACCENT_DK,
+                                        selectforeground=TXT, font=(FONT, 9), height=4,
+                                        relief="flat", highlightthickness=1,
+                                        highlightbackground=LINE, bd=0)
+        vscroll = tk.Scrollbar(vlist_frame, orient="vertical", command=self.vocab_listbox.yview,
+                               bg=CARD, troughcolor=CARD2, bd=0, highlightthickness=0)
+        self.vocab_listbox.configure(yscrollcommand=vscroll.set)
+        self.vocab_listbox.pack(side="left", fill="x", expand=True)
+        vscroll.pack(side="right", fill="y")
+
+        vact_row = tk.Frame(vc, bg=CARD)
+        vact_row.pack(fill="x", padx=14, pady=(0, 10))
+        self._button(vact_row, "Remove Selected", self._remove_vocab).pack(side="left", padx=(0, 6))
+        self._button(vact_row, "Clear All", self._clear_vocab).pack(side="left")
+
+        # Word Replacement card
+        rc = self._card(body)
+        rhead = tk.Frame(rc, bg=CARD)
+        rhead.pack(fill="x", padx=14, pady=(10, 2))
+        tk.Label(rhead, text="WORD REPLACEMENTS", fg=MUT, bg=CARD,
+                 font=(FONT, 8, "bold")).pack(side="left")
+        self.rep_count_lbl = tk.Label(rhead, text="", fg=MUT, bg=CARD, font=(FONT, 8))
+        self.rep_count_lbl.pack(side="right")
+
+        tk.Label(rc, text="Automatic whole-word replacement for persistent misheard words (case-insensitive).",
+                 fg=MUT, bg=CARD, font=(FONT, 8), justify="left", anchor="w").pack(fill="x", padx=14, pady=(0, 6))
+
+        rinput_row = tk.Frame(rc, bg=CARD)
+        rinput_row.pack(fill="x", padx=14, pady=(0, 6))
+
+        tk.Label(rinput_row, text="When heard:", fg=MUT, bg=CARD, font=(FONT, 8)).pack(side="left", padx=(0, 4))
+        self.rep_src_entry = tk.Entry(rinput_row, bg=CARD2, fg=TXT, insertbackground=TXT,
+                                      font=(FONT, 9), relief="flat", highlightthickness=1,
+                                      highlightbackground=LINE, width=14)
+        self.rep_src_entry.pack(side="left", fill="x", expand=True, ipady=4, padx=(0, 8))
+
+        tk.Label(rinput_row, text="Replace with:", fg=MUT, bg=CARD, font=(FONT, 8)).pack(side="left", padx=(0, 4))
+        self.rep_dst_entry = tk.Entry(rinput_row, bg=CARD2, fg=TXT, insertbackground=TXT,
+                                      font=(FONT, 9), relief="flat", highlightthickness=1,
+                                      highlightbackground=LINE, width=14)
+        self.rep_dst_entry.pack(side="left", fill="x", expand=True, ipady=4, padx=(0, 8))
+        self.rep_dst_entry.bind("<Return>", lambda _e: self._add_replacement())
+
+        self.rep_add_btn = self._button(rinput_row, "+ Add Rule", self._add_replacement)
+        self.rep_add_btn.pack(side="right")
+
+        rlist_frame = tk.Frame(rc, bg=CARD)
+        rlist_frame.pack(fill="x", padx=14, pady=(0, 6))
+        self.rep_listbox = tk.Listbox(rlist_frame, bg=CARD2, fg=TXT, selectbackground=ACCENT_DK,
+                                      selectforeground=TXT, font=(FONT, 9), height=4,
+                                      relief="flat", highlightthickness=1,
+                                      highlightbackground=LINE, highlightcolor=ACCENT, bd=0)
+        rscroll = tk.Scrollbar(rlist_frame, orient="vertical", command=self.rep_listbox.yview,
+                               bg=CARD, troughcolor=CARD2, bd=0, highlightthickness=0)
+        self.rep_listbox.configure(yscrollcommand=rscroll.set)
+        self.rep_listbox.pack(side="left", fill="x", expand=True)
+        rscroll.pack(side="right", fill="y")
+
+        ract_row = tk.Frame(rc, bg=CARD)
+        ract_row.pack(fill="x", padx=14, pady=(0, 10))
+        self._button(ract_row, "Remove Selected", self._remove_replacement).pack(side="left")
+
         # History card
-        hc = self._card(self.root, pady=(0, 8))
+        hc = self._card(body, pady=(0, 8))
         tk.Label(hc, text="HISTORY   click = copy · right-click = copy raw",
                  fg=MUT, bg=CARD, font=(FONT, 8, "bold")).pack(
             anchor="w", padx=14, pady=(10, 2))
@@ -355,8 +518,15 @@ class ResonantUI:
     def _menu(self, parent, var, options, command):
         """One styled OptionMenu for every dropdown (keeps the palette in one place)."""
         menu = tk.OptionMenu(parent, var, *options, command=command)
-        menu.configure(bg=CARD2, fg=TXT, relief="flat", activebackground=CARD2,
-                       activeforeground=TXT, font=(FONT, 9), highlightthickness=0)
+        menu.configure(bg=CARD2, fg=TXT, relief="flat", activebackground=CARD_HOVER,
+                       activeforeground=TXT, font=(FONT, 9), highlightthickness=1,
+                       highlightbackground=LINE, bd=0)
+        try:
+            menu["menu"].configure(bg=CARD2, fg=TXT, activebackground=ACCENT_ACTIVE,
+                                   activeforeground=TXT, font=(FONT, 9), bd=0)
+        except Exception:
+            pass
+        self._add_hover(menu, CARD_HOVER, CARD2)
         return menu
 
     @staticmethod
@@ -413,25 +583,47 @@ class ResonantUI:
 
     def _button(self, parent, text, cmd):
         b = tk.Button(parent, text=text, command=cmd, relief="flat",
-                      bg=CARD, fg=MUT, activebackground=CARD2, activeforeground=TXT,
-                      font=(FONT, 9), cursor="hand2", bd=0, padx=12, pady=4)
+                      bg=CARD2, fg=TXT, activebackground=CARD_HOVER, activeforeground=TXT,
+                      font=(FONT, 9), cursor="hand2", bd=0, padx=12, pady=5)
         self._add_focus_ring(b)
+        self._add_hover(b, CARD_HOVER, CARD2)
         return b
 
     def _toggle_btn(self, parent, label, cmd, col=True):
         b = tk.Button(parent, text=label, relief="flat", bd=0, cursor="hand2",
-                      font=(FONT, 9), padx=10, pady=5, bg=CARD2, fg=TXT,
-                      activebackground=CARD2, command=cmd)
-        b.pack(side="left", padx=(0, 8))
+                      font=(FONT, 9), padx=10, pady=5, bg=CARD2, fg=MUT,
+                      activebackground=CARD_HOVER, activeforeground=TXT, command=cmd)
+        b.pack(side="left", padx=(0, 6), pady=2)
         self._add_focus_ring(b)
+        self._add_hover(b, CARD_HOVER)
         return b
+
+    def _add_hover(self, widget, hover_bg, normal_bg=None):
+        """Smooth visual feedback on mouseover for buttons and interactive rows."""
+        def on_enter(_e):
+            try:
+                if not hasattr(widget, "_default_bg"):
+                    widget._default_bg = widget.cget("bg")
+                widget.configure(bg=hover_bg)
+            except Exception:
+                pass
+
+        def on_leave(_e):
+            try:
+                bg = normal_bg if normal_bg is not None else getattr(widget, "_default_bg", CARD2)
+                widget.configure(bg=bg)
+            except Exception:
+                pass
+
+        widget.bind("<Enter>", on_enter, add="+")
+        widget.bind("<Leave>", on_leave, add="+")
 
     def _add_focus_ring(self, widget):
         """Visible focus ring (W5.7)."""
         def on_in(_e):
             try:
-                widget.configure(highlightthickness=2, highlightbackground=GREEN,
-                                 highlightcolor=GREEN)
+                widget.configure(highlightthickness=1, highlightbackground=ACCENT,
+                                 highlightcolor=ACCENT)
             except Exception:
                 pass
 
@@ -440,8 +632,8 @@ class ResonantUI:
                 widget.configure(highlightthickness=0)
             except Exception:
                 pass
-        widget.bind("<FocusIn>", on_in)
-        widget.bind("<FocusOut>", on_out)
+        widget.bind("<FocusIn>", on_in, add="+")
+        widget.bind("<FocusOut>", on_out, add="+")
         widget.configure(takefocus=1)
 
     # -------------------------------------------------------------- poll
@@ -486,8 +678,22 @@ class ResonantUI:
         if s.get("model_error"):
             color, text, hint = RED, "Model failed to load", "see the log"
         elif s.get("loading_model"):
-            color, text = AMBER, f"Loading {s['loading_model']}…"
+            target_m = s["loading_model"]
+            color, text = AMBER, f"Loading {target_m}…"
             hint = "dictation continues on the current model"
+            try:
+                model_sizes = {"tiny.en": 75, "base.en": 142, "small.en": 461, "medium.en": 1420}
+                exp_mb = model_sizes.get(target_m, 0)
+                cache_p = os.path.join(os.path.expanduser("~/.cache/whisper"), f"{target_m}.pt")
+                if os.path.exists(cache_p) and exp_mb:
+                    cur_mb = os.path.getsize(cache_p) / (1024 * 1024)
+                    if cur_mb < exp_mb * 0.98:
+                        pct = int((cur_mb / exp_mb) * 100)
+                        hint = f"downloading {cur_mb:.0f}/{exp_mb} MB ({pct}%)"
+                    else:
+                        hint = "loading weights into memory…"
+            except Exception:
+                pass
         elif not ready:
             color, text, hint = MUT, "Loading AI models…", "one moment"
         elif rec:
@@ -506,63 +712,117 @@ class ResonantUI:
             color, text = AMBER, "Busy — queued"
             hint = f"{s['queue_depth']} waiting"
         elif listening:
-            color, text = GREEN, "Listening"
+            color, text = ACCENT, "Listening"
             hint = (f"tap {hotkey} to start / stop" if hk_mode == "toggle"
                     else f"hold {hotkey} anywhere to dictate")
         else:
-            color, text, hint = MUT, "Paused", "press Start to begin"
+            color, text, hint = DIM, "Paused", "press Start to begin"
 
         self.dot.delete("all")
-        self.dot.create_oval(2, 2, 14, 14, fill=color, outline="")
+        if color == ACCENT:
+            # Subtle glow ring for listening state
+            self.dot.create_oval(0, 0, 16, 16, fill="", outline="#3730a3", width=1.5)
+            self.dot.create_oval(3, 3, 13, 13, fill=ACCENT, outline="")
+        elif color == RED and rec:
+            self.dot.create_oval(0, 0, 16, 16, fill="", outline=RED_PULSE, width=1.5)
+            self.dot.create_oval(3, 3, 13, 13, fill=color, outline="")
+        else:
+            self.dot.create_oval(2, 2, 14, 14, fill=color, outline="")
         self.status_lbl.configure(text=text)
         self.hint_lbl.configure(text=hint)
 
         self.meter.delete("all")
+        # Sleek meter background trough
+        self.meter.create_rectangle(0, 1, 370, 5, fill="#1c212e", width=0)
         if rec:
             w = int(min(1.0, s["level"]) * 366)
-            self.meter.create_rectangle(0, 0, max(w, 2), 6, fill=GREEN, width=0)
+            self.meter.create_rectangle(0, 1, max(w, 4), 5, fill=ACCENT, width=0)
 
         if listening:
             self.toggle_btn.configure(text="Pause listening", bg=CARD2, fg=TXT,
-                                      activebackground=LINE, activeforeground=TXT)
+                                      activebackground=CARD_HOVER, activeforeground=TXT)
+            self.toggle_btn._default_bg = CARD2
         else:
-            self.toggle_btn.configure(text="Start listening", bg=GREEN, fg="#06130a",
-                                      activebackground=GREEN_DK)
+            self.toggle_btn.configure(text="Start listening", bg=ACCENT, fg="#ffffff",
+                                      activebackground=ACCENT_HOVER, activeforeground="#ffffff")
+            self.toggle_btn._default_bg = ACCENT
 
         # Text states, never colour-only (W5.7)
         mode = st.get("ai_cleanup_mode", "smart")
+        cleanup_on = (mode != "off")
         self.cleanup_btn.configure(
             text=f"AI cleanup: {mode.capitalize()}",
-            bg=CARD2 if mode != "off" else CARD,
-            fg=GREEN if mode != "off" else MUT)
+            bg=ACCENT_BG if cleanup_on else CARD2,
+            fg=ACCENT_LIGHT if cleanup_on else MUT,
+            highlightthickness=1 if cleanup_on else 0,
+            highlightbackground=ACCENT_BORDER if cleanup_on else LINE)
+        self.cleanup_btn._default_bg = ACCENT_BG if cleanup_on else CARD2
+
+        provider = st.get("llm_provider", "groq")
+        g_model = st.get("groq_model", "qwen/qwen3.8-27b")
+        ptext = "LLM: Groq (Cloud)"
+        phint = f"{g_model} · cloud"
+        self.provider_btn.configure(text=ptext, fg=ACCENT_LIGHT, bg=ACCENT_BG,
+                                    highlightthickness=1, highlightbackground=ACCENT_BORDER)
+        self.provider_btn._default_bg = ACCENT_BG
+        self.provider_hint.configure(text=phint)
+
+        sound_on = bool(st.get("sound_feedback"))
         self.sound_btn.configure(
-            text=f"Sounds: {'On' if st.get('sound_feedback') else 'Off'}",
-            bg=CARD2 if st.get("sound_feedback") else CARD,
-            fg=GREEN if st.get("sound_feedback") else MUT)
+            text=f"Sounds: {'On' if sound_on else 'Off'}",
+            bg=ACCENT_BG if sound_on else CARD2,
+            fg=ACCENT_LIGHT if sound_on else MUT,
+            highlightthickness=1 if sound_on else 0,
+            highlightbackground=ACCENT_BORDER if sound_on else LINE)
+        self.sound_btn._default_bg = ACCENT_BG if sound_on else CARD2
+
         inject = st.get("inject_mode", "auto")
         self.paste_btn.configure(text=f"Typing: {inject.capitalize()}",
                                  bg=CARD2, fg=TXT)
+
+        space_on = bool(st.get("append_trailing_space"))
         self.space_btn.configure(
-            text=f"Trailing space: {'On' if st.get('append_trailing_space') else 'Off'}",
-            bg=CARD2 if st.get("append_trailing_space") else CARD,
-            fg=GREEN if st.get("append_trailing_space") else MUT)
+            text=f"Trailing space: {'On' if space_on else 'Off'}",
+            bg=ACCENT_BG if space_on else CARD2,
+            fg=ACCENT_LIGHT if space_on else MUT,
+            highlightthickness=1 if space_on else 0,
+            highlightbackground=ACCENT_BORDER if space_on else LINE)
+        self.space_btn._default_bg = ACCENT_BG if space_on else CARD2
+
+        pill_on = st.get("floating_pill", True)
+        self.pill_btn.configure(
+            text=f"Cursor bubble: {'On' if pill_on else 'Off'}",
+            bg=ACCENT_BG if pill_on else CARD2,
+            fg=ACCENT_LIGHT if pill_on else MUT,
+            highlightthickness=1 if pill_on else 0,
+            highlightbackground=ACCENT_BORDER if pill_on else LINE)
+        self.pill_btn._default_bg = ACCENT_BG if pill_on else CARD2
+
         try:
             silence = int(st.get("silence_autostop_ms", 0) or 0)
         except (TypeError, ValueError):
             silence = 0
         self.silence_btn.configure(
             text="Silence stop: " + (f"{silence / 1000:g} s" if silence else "Off"),
-            bg=CARD2 if silence else CARD,
-            fg=GREEN if silence else MUT)
+            bg=ACCENT_BG if silence else CARD2,
+            fg=ACCENT_LIGHT if silence else MUT,
+            highlightthickness=1 if silence else 0,
+            highlightbackground=ACCENT_BORDER if silence else LINE)
+        self.silence_btn._default_bg = ACCENT_BG if silence else CARD2
+
         undo_label = ((self.engine.settings.get("undo_chord") or "off").lower()
                       or "off")
         undo_text = (undo_label.replace("_", " ").replace("ctrl", "Ctrl")
                      .replace("alt", "Alt").replace("scroll_lock", "Scroll Lock")
                      .title() if undo_label != "off" else "Off")
+        undo_on = (undo_label != "off")
         self.undo_btn.configure(
             text=f"Undo: {undo_text}",
-            bg=CARD2 if undo_label != "off" else CARD,
-            fg=GREEN if undo_label != "off" else MUT)
+            bg=ACCENT_BG if undo_on else CARD2,
+            fg=ACCENT_LIGHT if undo_on else MUT,
+            highlightthickness=1 if undo_on else 0,
+            highlightbackground=ACCENT_BORDER if undo_on else LINE)
+        self.undo_btn._default_bg = ACCENT_BG if undo_on else CARD2
 
         if self.model_var.get() != st.get("stt_model"):
             self.model_var.set(st.get("stt_model", ""))
@@ -578,6 +838,16 @@ class ResonantUI:
         mic_label = self._mic_label_for(st.get("input_device"))
         if self.mic_var.get() != mic_label:
             self.mic_var.set(mic_label)
+
+        cur_vocab = list(st.get("custom_vocabulary") or [])
+        if getattr(self, "_last_rendered_vocab", None) != cur_vocab:
+            self._last_rendered_vocab = list(cur_vocab)
+            self._update_vocab_ui(cur_vocab)
+
+        cur_reps = dict(st.get("replacements") or {})
+        if getattr(self, "_last_rendered_reps", None) != cur_reps:
+            self._last_rendered_reps = dict(cur_reps)
+            self._update_replacements_ui(cur_reps)
 
         self._update_live(s)
         self._render_history(s["history"])
@@ -595,7 +865,7 @@ class ResonantUI:
             text = f"“{final}”"
             if raw and raw != final:
                 text = f"heard: {raw}\n→ {text}"
-            fg = GREEN if status_key(s.get("last_status")) in ("typed", "copied") else MUT
+            fg = ACCENT_LIGHT if status_key(s.get("last_status")) in ("typed", "copied") else MUT
             self.live_lbl.configure(text=text, fg=fg)
         else:
             self.live_lbl.configure(
@@ -603,6 +873,12 @@ class ResonantUI:
                      "wherever the cursor is.", fg=MUT)
 
     def _update_pill(self, s):
+        pill_enabled = s["settings"].get("floating_pill", True)
+        if hasattr(self.pill, "enabled"):
+            self.pill.enabled = pill_enabled
+        if not pill_enabled:
+            self.pill.hide()
+            return
         hotkey = (s["settings"].get("hotkey") or "f9").upper()
         toggle = s["settings"].get("hotkey_mode") == "toggle"
         # Also runs while the dashboard is hidden, so a notice still reaches the
@@ -645,9 +921,10 @@ class ResonantUI:
         final = item.get("final") or ""
         raw = item.get("raw") or ""
         skey = status_key(item.get("status"))
-        row = tk.Frame(self.hist_frame, bg=CARD2, cursor="hand2", takefocus=1)
+        row = tk.Frame(self.hist_frame, bg=CARD2, cursor="hand2", takefocus=1,
+                       highlightbackground=LINE, highlightthickness=1)
         row.pack(fill="x", pady=2)
-        glyph_color = {"typed": GREEN, "copied": AMBER, "failed": RED,
+        glyph_color = {"typed": ACCENT_LIGHT, "copied": AMBER, "failed": RED,
                        "dropped": MUT}[skey]
         glyph = tk.Label(row, text=STATUS_GLYPH[skey], fg=glyph_color, bg=CARD2,
                          font=(FONT, 9, "bold"), width=2)
@@ -658,7 +935,7 @@ class ResonantUI:
         short = final if len(final) <= 58 else final[:57] + "…"
         text_lbl = tk.Label(row, text=short or "(nothing typed)", fg=TXT, bg=CARD2,
                             font=(FONT, 9), anchor="w", justify="left")
-        text_lbl.pack(side="left", fill="x", expand=True, padx=(0, 8), pady=3)
+        text_lbl.pack(side="left", fill="x", expand=True, padx=(0, 8), pady=4)
 
         widgets = [row, glyph, time_lbl, text_lbl]
 
@@ -670,7 +947,7 @@ class ResonantUI:
 
         def on_enter(_event=None):
             for w in widgets:
-                w.configure(bg=LINE)
+                w.configure(bg=CARD_HOVER)
 
         def on_leave(_event=None):
             for w in widgets:
@@ -714,6 +991,23 @@ class ResonantUI:
         nxt = order[(order.index(current) + 1) % len(order)] if current in order else "smart"
         self.engine.apply_settings({"ai_cleanup_mode": nxt})
 
+    def _cycle_provider(self):
+        self.engine.apply_settings({"llm_provider": "groq"})
+        g_model = self.engine.settings.get("groq_model", "qwen/qwen3.8-27b")
+        self.engine.set_notice(f"LLM: Groq ({g_model}) · Cloud")
+
+    def _prompt_groq_key(self):
+        from tkinter import simpledialog
+        current = self.engine.settings.get("groq_api_key") or DEFAULT_GROQ_API_KEY
+        key = simpledialog.askstring(
+            "Groq API Key",
+            "Groq API Key (starts with gsk_):\n"
+            "Default key is already configured and active.",
+            initialvalue=current, parent=self.root)
+        if key is not None and key.strip():
+            self.engine.apply_settings({"groq_api_key": key.strip(), "llm_provider": "groq"})
+            self.engine.set_notice("Groq API key updated.")
+
     def _toggle_sound(self):
         self.engine.apply_settings(
             {"sound_feedback": not self.engine.settings.get("sound_feedback", True)})
@@ -722,6 +1016,11 @@ class ResonantUI:
         self.engine.apply_settings(
             {"append_trailing_space":
              not self.engine.settings.get("append_trailing_space", True)})
+
+    def _toggle_pill(self):
+        current = self.engine.settings.get("floating_pill", True)
+        self.engine.apply_settings({"floating_pill": not current})
+        self.engine.set_notice(f"Cursor bubble is now {'on' if not current else 'off'}.")
 
     def _cycle_silence_stop(self):
         current = self.engine.settings.get("silence_autostop_ms", 0)
@@ -782,6 +1081,99 @@ class ResonantUI:
             self.engine.set_notice(
                 "Microphone: " + ("system default" if index is None else label))
 
+    def _add_vocab(self):
+        text = self.vocab_entry.get().strip()
+        if not text:
+            return
+        current = list(self.engine.settings.get("custom_vocabulary") or [])
+        parts = [p.strip() for p in text.split(",") if p.strip()]
+        added = 0
+        for p in parts:
+            if p not in current:
+                current.append(p)
+                added += 1
+        if added > 0:
+            self.engine.apply_settings({"custom_vocabulary": current})
+            self._last_rendered_vocab = list(current)
+            self._update_vocab_ui(current)
+            self.engine.set_notice(f"Added {added} term(s) to custom vocabulary.")
+        self.vocab_entry.delete(0, tk.END)
+
+    def _remove_vocab(self):
+        sel = self.vocab_listbox.curselection()
+        if not sel:
+            return
+        current = list(self.engine.settings.get("custom_vocabulary") or [])
+        indices = sorted(sel, reverse=True)
+        removed_count = 0
+        for idx in indices:
+            if 0 <= idx < len(current):
+                current.pop(idx)
+                removed_count += 1
+        self.engine.apply_settings({"custom_vocabulary": current})
+        self._last_rendered_vocab = list(current)
+        self._update_vocab_ui(current)
+        self.engine.set_notice(f"Removed {removed_count} term(s) from custom vocabulary.")
+
+    def _clear_vocab(self):
+        current = self.engine.settings.get("custom_vocabulary") or []
+        if not current:
+            return
+        self.engine.apply_settings({"custom_vocabulary": []})
+        self._last_rendered_vocab = []
+        self._update_vocab_ui([])
+        self.engine.set_notice("Cleared custom vocabulary.")
+
+    def _update_vocab_ui(self, vocab):
+        if not hasattr(self, "vocab_listbox"):
+            return
+        self.vocab_listbox.delete(0, tk.END)
+        for w in vocab:
+            self.vocab_listbox.insert(tk.END, f"  •  {w}")
+        count = len(vocab)
+        self.vocab_count_lbl.configure(text=f"{count} {'term' if count == 1 else 'terms'}")
+
+    def _add_replacement(self):
+        src = self.rep_src_entry.get().strip()
+        dst = self.rep_dst_entry.get().strip()
+        if not src or not dst:
+            self.engine.set_notice("Both 'When heard' and 'Replace with' are required.")
+            return
+        current = dict(self.engine.settings.get("replacements") or {})
+        current[src] = dst
+        self.engine.apply_settings({"replacements": current})
+        self._last_rendered_reps = dict(current)
+        self._update_replacements_ui(current)
+        self.engine.set_notice(f"Replacement saved: '{src}' → '{dst}'")
+        self.rep_src_entry.delete(0, tk.END)
+        self.rep_dst_entry.delete(0, tk.END)
+
+    def _remove_replacement(self):
+        sel = self.rep_listbox.curselection()
+        if not sel:
+            return
+        current = dict(self.engine.settings.get("replacements") or {})
+        keys = list(current.keys())
+        indices = sorted(sel, reverse=True)
+        removed = 0
+        for idx in indices:
+            if 0 <= idx < len(keys):
+                del current[keys[idx]]
+                removed += 1
+        self.engine.apply_settings({"replacements": current})
+        self._last_rendered_reps = dict(current)
+        self._update_replacements_ui(current)
+        self.engine.set_notice("Removed replacement rule.")
+
+    def _update_replacements_ui(self, reps):
+        if not hasattr(self, "rep_listbox"):
+            return
+        self.rep_listbox.delete(0, tk.END)
+        for src, dst in reps.items():
+            self.rep_listbox.insert(tk.END, f"  “{src}”  ➔  “{dst}”")
+        count = len(reps)
+        self.rep_count_lbl.configure(text=f"{count} {'rule' if count == 1 else 'rules'}")
+
     def _open_log(self):
         try:
             if not os.path.exists(LOG_PATH):
@@ -837,6 +1229,19 @@ class ResonantUI:
         self.pill.hide()
         self.root.withdraw()
 
+    def show(self):
+        """Restore the dashboard from tray and bring it to front."""
+        def _do_show():
+            try:
+                self.root.deiconify()
+                self.root.lift()
+                self.root.attributes("-topmost", True)
+                self.root.after_idle(self.root.attributes, "-topmost", False)
+                self.root.focus_force()
+            except Exception:
+                pass
+        self.root.after(0, _do_show)
+
 
 # ------------------------------------------------------------------ tray
 def create_tray(engine, ui):
@@ -851,7 +1256,7 @@ def create_tray(engine, ui):
         return icons[name]
 
     def show():
-        ui.root.after(0, lambda: (ui.root.deiconify(), ui.root.lift()))
+        ui.show()
 
     def toggle_listen(icon, item):
         ui.root.after(0, ui._toggle_listening)

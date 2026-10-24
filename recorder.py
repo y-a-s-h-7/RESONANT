@@ -172,7 +172,7 @@ class Recorder:
         is invoked once (from the capture thread) when it fires.
         """
         self.buffer = buffer or RecordingBuffer()
-        self.max_seconds = max_seconds or MAX_RECORD_DEFAULT_S
+        self.max_seconds = max_seconds if max_seconds is not None else MAX_RECORD_DEFAULT_S
         self.max_hit = False
         self.silence_hit = False
         self._on_max = on_max
@@ -221,7 +221,7 @@ class Recorder:
             tail_done = False
             while True:
                 if not self._stop_event.is_set():
-                    if time.monotonic() - start_t >= self.max_seconds:
+                    if self.max_seconds and self.max_seconds > 0 and (time.monotonic() - start_t >= self.max_seconds):
                         self.max_hit = True
                         self._stop_event.set()
                         if self._on_max:

@@ -96,6 +96,9 @@ class WinPlatform:
         self.user32.SetWindowsHookExW.restype = ctypes.c_void_p
         self.user32.SetWindowsHookExW.argtypes = [
             ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+        self.user32.CallNextHookEx.restype = ctypes.c_void_p
+        self.user32.CallNextHookEx.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
         proc = hook_proc
         if not isinstance(hook_proc, ctypes._CFuncPtr):
             proc_type = ctypes.WINFUNCTYPE(ctypes.c_void_p, ctypes.c_int,
@@ -103,7 +106,7 @@ class WinPlatform:
             proc = proc_type(hook_proc)
         self._hook_proc = proc            # anchor: GC would free the callback
         handle = self.user32.SetWindowsHookExW(
-            13, proc, None, 0)   # 13 == WH_KEYBOARD_LL
+            13, proc, None, 0)   # 13 == WH_KEYBOARD_LL (hMod=None for global LL hook)
         return handle or None
 
     def unhook_keyboard(self, handle):
@@ -316,7 +319,6 @@ class WinPlatform:
         except OSError:
             return False
 
-    # -------------------------------------------------------- named event
     def make_or_open_event(self, name):
         EVENT_MODIFY_STATE = 0x0002
         return self.kernel32.OpenEventW(EVENT_MODIFY_STATE, False, name) or None
@@ -327,8 +329,14 @@ class WinPlatform:
     def signal_event(self, handle):
         return bool(self.kernel32.SetEvent(handle))
 
-    def message_box(self, text, title):
-        self.user32.MessageBoxW(None, text, title, 0x10)
+    def wait_for_event(self, handle, timeout_ms=0xFFFFFFFF):
+        return self.kernel32.WaitForSingleObject(handle, timeout_ms)
+
+    def close_handle(self, handle):
+        return bool(self.kernel32.CloseHandle(handle))
+
+    def message_box(self, text, title, flags=0x10):
+        self.user32.MessageBoxW(None, text, title, flags)
 
 
 def _lazy_winreg():

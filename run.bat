@@ -5,6 +5,12 @@ rem Starts Resonant in the background (tray icon near the taskbar clock;
 rem the dashboard window can be re-opened from the tray at any time).
 rem Quit anytime from the tray menu: Exit (or press Ctrl+Shift+Scroll Lock).
 
+rem Prioritize standalone compiled executable if present
+if exist "%~dp0dist\Resonant\Resonant.exe" (
+  start "" "%~dp0dist\Resonant\Resonant.exe" %*
+  exit /b 0
+)
+
 rem Prioritize local virtual environment (.venv) if present
 if exist "%~dp0.venv\Scripts\pythonw.exe" (
   set "PYW=%~dp0.venv\Scripts\pythonw.exe"

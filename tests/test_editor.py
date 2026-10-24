@@ -266,5 +266,64 @@ class TestCleanPipeline:
         assert "First chunk clean." in text               # good chunk survived
 
 
+    def test_groq_chat_request_format(self):
+        import editor as ed
+        captured = {}
+        class FakeResp:
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return {
+                    "choices": [{
+                        "message": {"content": "Shopping list:\n- Apples\n- Bananas"},
+                        "finish_reason": "stop"
+                    }]
+                }
+        orig = ed.requests.post
+        ed.requests.post = lambda url, headers=None, json=None, timeout=None: captured.update(
+            url=url, headers=headers, json=json) or FakeResp()
+        try:
+            out, reason = ed._groq_chat("llama-3.3-70b-versatile", "shopping list apples bananas", 5,
+                                        api_key="gsk_test123")
+        finally:
+            ed.requests.post = orig
+        assert out == "Shopping list:\n- Apples\n- Bananas"
+        assert reason == "stop"
+        assert captured["headers"]["Authorization"] == "Bearer gsk_test123"
+        assert captured["json"]["model"] == "llama-3.3-70b-versatile"
+        assert captured["json"]["messages"][1]["content"] == "<transcript>shopping list apples bananas</transcript>"
+
+    def test_groq_missing_api_key_falls_back_to_raw(self):
+        raw = "shopping list apples bananas scratch that remove bananas"
+        text, status = editor.clean(raw, mode="always", provider="groq", api_key="")
+        assert status == "raw:llm-unavailable"
+        assert "shopping" in text.lower()
+
+    def test_groq_clean_success(self):
+        import editor as ed
+        class FakeResp:
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return {
+                    "choices": [{
+                        "message": {"content": "Shopping list:\n- Bananas\n- Oranges\n- Strawberries\n- Papaya"},
+                        "finish_reason": "stop"
+                    }]
+                }
+        orig = ed.requests.post
+        ed.requests.post = lambda *a, **k: FakeResp()
+        try:
+            raw = "Create me a shopping list for bananas, apples, oranges... no, no, remove apples, instead add strawberries and papaya..."
+            text, status = editor.clean(raw, mode="always", provider="groq", api_key="gsk_valid")
+        finally:
+            ed.requests.post = orig
+        assert status == "cleaned"
+        assert "Bananas" in text
+        assert "Strawberries" in text
+        assert "Papaya" in text
+        assert "Apples" not in text and "apples" not in text
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

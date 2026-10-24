@@ -99,6 +99,7 @@ def make_engine(text="hello world", status="typed"):
     settings["ai_cleanup_mode"] = "off"       # no network in unit tests
     settings["sound_feedback"] = False
     settings["min_peak"] = 0.01
+    settings["stt_fp16"] = False              # no torch probe in unit tests
     engine = resonant_engine.ResonantEngine(settings=settings,
                                             platform=FakePlatform(),
                                             injector=FakeInjector(status=status))
@@ -212,7 +213,7 @@ class TestModelSwitchSafety:
         assert engine.load_models("small.en") is False
         assert engine.settings["stt_model"] == previous
         assert engine.stt_model is not None          # app keeps working
-        assert engine.model_error
+        assert engine.model_error == "offline"
 
     def test_superseded_load_is_discarded(self, monkeypatch):
         import sys
@@ -350,6 +351,7 @@ class TestFp16Wiring:
     def test_engine_forwards_vad_filter_and_prompt_for_faster_backend(self):
         """vad_filter and initial_prompt reach the model for the faster backend."""
         engine = make_engine()
+        engine.settings["stt_fp16"] = "auto"
         engine.settings["asr_backend"] = "faster"
         engine.settings["custom_vocabulary"] = ["Kubernetes"]
         engine.stt_model = engine.stt_model or None

@@ -13,6 +13,10 @@ Public API (unchanged, brief §2):
 Events:  "state" | "dictation" | "level" | "log" | "notice"  (last two additive)
 State keys are the old ones plus `stage`, `queue_depth`, `ollama_ok`, `notice`.
 """
+import io
+import os
+import re
+import sys
 import threading
 import time
 from collections import deque
@@ -32,6 +36,7 @@ from config import (
     BLIP_FREQ,
     BLIP_VOLUME,
     BUSY_CUE_FREQ,
+    DEFAULT_GROQ_API_KEY,
     DEFAULT_SETTINGS,
     LANGUAGE,
     OLLAMA_CHAT_URL,
@@ -87,7 +92,7 @@ class ResonantEngine:
         self.stage = ""
         self.notice_seq = 0
         self.queue_depth = 0
-        self.ollama_ok = None
+        self.ollama_ok = True
         self.notice = ""
         self.loading_model = None
         self.hotkey_backend = None
@@ -313,13 +318,34 @@ class ResonantEngine:
     def load_models(self, target=None, persist=True):
         """Load an STT model. Commits the setting only on success (W4.5)."""
         target = target or self.settings.get("stt_model")
+        backend = self.settings.get("asr_backend", "default")
         with self._lock:
             self._load_gen += 1
             generation = self._load_gen
         self.loading_model = target
         self.set_stage(f"Loading {target}…")
-        self._emit_state()        try:
-            log(f"Loading STT '{target}' (backend { backend})…")
+        self._emit_state()
+        try:
+            if sys.stdout is None or not hasattr(sys.stdout, "write"):
+                try:
+                    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+                except Exception:
+                    class _SafeStream(io.StringIO):
+                        def write(self, s): pass
+                        def flush(self): pass
+                        def isatty(self): return False
+                    sys.stdout = _SafeStream()
+            if sys.stderr is None or not hasattr(sys.stderr, "write"):
+                try:
+                    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+                except Exception:
+                    class _SafeStream(io.StringIO):
+                        def write(self, s): pass
+                        def flush(self): pass
+                        def isatty(self): return False
+                    sys.stderr = _SafeStream()
+
+            log(f"Loading STT '{target}' (backend {backend})…")
             if backend == "faster":
                 # Faster-whisper (CTranslate2) backend — lazy import so the dev
                 # venv that stays on the default whisper backend never touches it.
@@ -337,11 +363,11 @@ class ResonantEngine:
                 self.set_stage("")
                 # The setting was never committed, so the previous model stays
                 # active and the next launch still uses it (W4.5).
-                self._notice(f"Could not load '{ target}' ({e}) — "
+                self._notice(f"Could not load '{target}' ({e}) — "
                              + ("keeping the current model." if self.stt_model
                                 else "dictation is unavailable."))
                 self._emit_state()
-            log(f"MODEL LOAD FAILED ({ target}): {e}")
+            log(f"MODEL LOAD FAILED ({target}): {e}")
             return False
         if generation != self._load_gen:
             log(f"Discarding superseded model '{target}'.")
@@ -458,6 +484,7 @@ class ResonantEngine:
         self.is_recording = False
         recorder = self._recorder
         log("Recording finished — processing.")
+        self.play_blip(freq=660)
         self.set_stage("Transcribing…")
         self._emit("level", 0.0)
         if recorder is None:
@@ -597,6 +624,8 @@ class ResonantEngine:
             log_transcript("Heard", raw_text,
                            self.settings.get("log_transcripts"))
 
+            raw_text = self._apply_replacements(raw_text)
+
             if self.settings.get("ai_cleanup_mode", "smart") != "off":
                 self.set_stage("Polishing…")
 
@@ -635,10 +664,12 @@ class ResonantEngine:
         vocab = self.settings.get("custom_vocabulary") or []
         if vocab:
             initial_prompt = ", ".join(vocab)[:1000]
+        else:
+            initial_prompt = "Dictation with punctuation. Shopping list: apples, bananas, oranges."
         backend = self.settings.get("asr_backend", "default")
         fp16 = self.settings.get("stt_fp16", "auto")
-        if backend == "faster" and fp16 == "auto":
-            fp16 = True                          # CTranslate2 handles fp16 on CPU too
+        if backend == "faster" and (fp16 == "auto" or fp16 is True):
+            fp16 = True
         extra = {}
         if backend == "faster":
             extra["vad_filter"] = None           # forwarded through to faster-whisper
@@ -647,23 +678,36 @@ class ResonantEngine:
                 self.stt_model, audio,
                 language=LANGUAGE,
                 initial_prompt=initial_prompt,
-                fp16=self.settings.get("stt_fp16", "auto"),
+                fp16=fp16,
                 **extra,
             )
 
     def _clean(self, raw_text):
         mode = self.settings.get("ai_cleanup_mode", "smart")
+        provider = self.settings.get("llm_provider", "groq")
+        if provider == "groq":
+            api_key = self.settings.get("groq_api_key") or os.environ.get("GROQ_API_KEY", "") or DEFAULT_GROQ_API_KEY
+            model = self.settings.get("groq_model", "qwen/qwen3.8-27b")
+            timeout_s = self.settings.get("groq_timeout_s", 10)
+        else:
+            api_key = ""
+            model = self.settings.get("ollama_model", "llama3.2")
+            timeout_s = self.settings.get("ollama_timeout_s", 10)
+
         final, status = editor_mod.clean(
             raw_text,
-            model=self.settings.get("ollama_model", "llama3.2"),
+            model=model,
             mode=mode,
             min_words=self.settings.get("smart_min_words", 40),
-            timeout_s=self.settings.get("ollama_timeout_s", 10),
+            timeout_s=timeout_s,
             keep_alive=self.settings.get("ollama_keep_alive", "30m"),
             session=self._get_session(),
+            provider=provider,
+            api_key=api_key,
         )
         if status != "cleaned" and mode != "off" and status != "raw:skipped-llm":
-            self._notice("AI cleanup unavailable — typed the raw transcript.")
+            pname = "Groq" if provider == "groq" else "Ollama"
+            self._notice(f"AI cleanup unavailable ({pname}) — typed the raw transcript.")
         return final, status
 
     def _apply_replacements(self, text):
@@ -677,7 +721,6 @@ class ResonantEngine:
         replacements = self.settings.get("replacements") or {}
         if not replacements or not text:
             return text
-        import re
         for source, target in replacements.items():
             if source:
                 text = re.sub(rf"\b{re.escape(source)}\b",
@@ -742,6 +785,9 @@ class ResonantEngine:
     def _ollama_health_loop(self):
         backoff = 5
         while self._started:
+            if self.settings.get("llm_provider", "groq") != "ollama":
+                time.sleep(HEALTH_RECHECK_S)
+                continue
             if not self.check_ollama():
                 time.sleep(backoff)
                 backoff = min(backoff * 2, HEALTH_RECHECK_S)
@@ -753,6 +799,8 @@ class ResonantEngine:
 
     def _warm_ollama_if_stale(self):
         """Overlap model cold-load with the user's speech (W4.7)."""
+        if self.settings.get("llm_provider", "groq") != "ollama":
+            return
         if self.settings.get("ai_cleanup_mode", "smart") == "off":
             return
         keep_alive = _keep_alive_seconds(self.settings.get("ollama_keep_alive", "30m"))
@@ -762,6 +810,8 @@ class ResonantEngine:
                          name="ollama-warmup").start()
 
     def warmup_ollama(self, force=False):
+        if self.settings.get("llm_provider", "groq") != "ollama":
+            return True
         if self.settings.get("ai_cleanup_mode", "smart") == "off":
             return False
         model = self.settings.get("ollama_model", "llama3.2")

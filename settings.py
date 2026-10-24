@@ -50,6 +50,7 @@ LEGACY_KEY_MAP = {
 
 ENUMS = {
     "ai_cleanup_mode": ("smart", "always", "off"),
+    "llm_provider": ("groq", "ollama"),
     "inject_mode": ("auto", "type", "paste"),
     "hotkey_mode": ("hold", "toggle"),
     "asr_backend": ("default", "faster"),
@@ -111,6 +112,22 @@ def validate(key, value):
         if isinstance(value, str) and value.strip():
             return True, value.strip(), None
         return False, default, "ollama_model must be a non-empty string"
+
+    if key == "groq_api_key":
+        if isinstance(value, str):
+            val = value.strip()
+            return True, val if val else default, None
+        return False, default, "groq_api_key must be a string"
+
+    if key == "groq_model":
+        if isinstance(value, str) and value.strip():
+            return True, value.strip(), None
+        return False, default, "groq_model must be a non-empty string"
+
+    if key == "groq_timeout_s":
+        if isinstance(value, (int, float)) and value > 0:
+            return True, float(value), None
+        return False, default, "groq_timeout_s must be a positive number"
 
     if key == "input_device":
         if value is None or (isinstance(value, int) and value >= 0):

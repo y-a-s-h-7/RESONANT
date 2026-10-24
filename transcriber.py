@@ -156,7 +156,11 @@ def transcribe(model, audio, language="en", initial_prompt=None, fp16="auto",
     forwarded to the model unchanged — the caller is responsible for passing
     only kwargs the model accepts (brief Phase 8: pass vad_filter and
     initial_prompt through to the faster-whisper model)."""
-    resolved = {"fp16": _use_fp16(fp16), "temperature": 0,
+    if "vad_filter" in kwargs:
+        fp16_val = bool(fp16 is True or fp16 == "auto")
+    else:
+        fp16_val = _use_fp16(fp16)
+    resolved = {"fp16": fp16_val, "temperature": 0,
                 "condition_on_previous_text": False}
     if language:
         resolved["language"] = language

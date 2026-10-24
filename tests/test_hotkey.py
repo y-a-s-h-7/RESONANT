@@ -128,6 +128,23 @@ class TestLLCallback:
         ret = proc(0, 0x0100, ctypes_addressof(kb))
         assert h._queue == [] and ret == 0
 
+    def test_other_keys_passthrough_with_64bit_address(self):
+        # CallNextHookEx must never raise OverflowError and must pass the key.
+        h = hk.Hotkey(key="f9", swallow_active=lambda: True)
+        calls = []
+        def fake_call_next(hHook, nCode, wParam, lParam):
+            calls.append((nCode, wParam, lParam))
+            return 0
+        h.platform = type("P", (), {"user32": type("U", (), {
+            "CallNextHookEx": staticmethod(fake_call_next)})()})()
+        proc = h._ll_callback()
+        kb = self._make_kbstruct(0x41)   # 'A'
+        addr = ctypes_addressof(kb)
+        ret = proc(0, 0x0100, addr)
+        assert ret == 0
+        assert len(calls) == 1
+        assert calls[0][2] == addr
+
 
 def ctypes_addressof(struct):
     import ctypes

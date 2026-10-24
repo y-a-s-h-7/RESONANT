@@ -31,12 +31,14 @@ def _platform(platform):
 def startup_command(hidden=True):
     """Quoted pythonw + script path (+ --hidden)."""
     exe = sys.executable
+    flag = " --hidden" if hidden else ""
+    if getattr(sys, "frozen", False):
+        return f'"{exe}"{flag}'
     if os.path.basename(exe).lower().startswith("python"):
         candidate = os.path.join(os.path.dirname(exe), "pythonw.exe")
         if os.path.exists(candidate):
             exe = candidate
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resonant.py")
-    flag = " --hidden" if hidden else ""
     return f'"{exe}" "{script}"{flag}'
 
 

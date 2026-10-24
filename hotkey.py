@@ -132,6 +132,10 @@ class Hotkey:
     def _ll_callback(self):
         """Returns the hook proc. Deliberately tiny: no I/O, no logging."""
         user32 = self.platform.user32
+        if hasattr(user32, "CallNextHookEx") and hasattr(user32.CallNextHookEx, "argtypes"):
+            user32.CallNextHookEx.restype = ctypes.c_void_p
+            user32.CallNextHookEx.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
 
         def proc(nCode, wParam, lParam):
             try:
@@ -155,9 +159,9 @@ class Hotkey:
                             self._post(False, swallow)
                             if swallow:
                                 return 1
+                return user32.CallNextHookEx(None, nCode, wParam, lParam)
             except Exception:
-                pass                                   # never raise inside a hook
-            return user32.CallNextHookEx(None, nCode, wParam, lParam)
+                return 0
         return proc
 
     # ------------------------------------------------------------ lifecycle

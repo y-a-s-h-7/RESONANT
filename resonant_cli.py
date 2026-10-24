@@ -17,7 +17,10 @@ import json
 import os
 import sys
 
-_BASE = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    _BASE = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    _BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _BASE)
 
 
@@ -61,13 +64,23 @@ def _load_stt_model(name, backend=None):
 def cmd_clean(args):
     import editor
     s = _settings()
+    provider = s.get("llm_provider", "groq")
+    if provider == "groq":
+        model = s.get("groq_model", "qwen/qwen3.8-27b")
+        timeout_s = s.get("groq_timeout_s", 10)
+        api_key = s.get("groq_api_key") or os.environ.get("GROQ_API_KEY")
+    else:
+        model = s.get("ollama_model", "llama3.2")
+        timeout_s = s.get("ollama_timeout_s", 10)
+        api_key = ""
     final, status = editor.clean(
         args.text,
-        model=s["ollama_model"],
+        model=model,
         mode=s["ai_cleanup_mode"],
         min_words=s["smart_min_words"],
-        timeout_s=s["ollama_timeout_s"],
-        keep_alive=s["ollama_keep_alive"],
+        timeout_s=timeout_s,
+        provider=provider,
+        api_key=api_key,
     )
     print(f"status: {status}")
     print(final)
@@ -110,10 +123,19 @@ def cmd_transcribe(args):
     if reason:
         print(f"gate:   {reason} (nothing would be typed)")
         return 0
+    provider = s.get("llm_provider", "groq")
+    if provider == "groq":
+        c_model = s.get("groq_model", "qwen/qwen3.8-27b")
+        c_timeout_s = s.get("groq_timeout_s", 10)
+        api_key = s.get("groq_api_key") or os.environ.get("GROQ_API_KEY")
+    else:
+        c_model = s.get("ollama_model", "llama3.2")
+        c_timeout_s = s.get("ollama_timeout_s", 10)
+        api_key = ""
     final, status = editor.clean(
-        gated, model=s["ollama_model"], mode=s["ai_cleanup_mode"],
-        min_words=s["smart_min_words"], timeout_s=s["ollama_timeout_s"],
-        keep_alive=s["ollama_keep_alive"])
+        gated, model=c_model, mode=s["ai_cleanup_mode"],
+        min_words=s["smart_min_words"], timeout_s=c_timeout_s,
+        provider=provider, api_key=api_key)
     print(f"clean:  {final}   [{status}]")
     return 0
 
